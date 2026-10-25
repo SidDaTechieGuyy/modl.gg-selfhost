@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: modlgg
+    volumes:
+      - modl-mongo-data:/data/db
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/modlgg}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
+    volumes:
+      - modl-uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+    ports:
+      - "80:80"
+
+volumes:
+  modl-mongo-data:
+  modl-uploads:
