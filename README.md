@@ -23,3 +23,5 @@ The repository contains two application folders:
 Runtime services are exactly `mongodb`, `frontend`, and `backend`.
 
 See [TESTING.md](TESTING.md) for repeatable unit and disposable-stack acceptance tests.
+
+Validation results are recorded in [VALIDATION.md](VALIDATION.md).

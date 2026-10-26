@@ -147,7 +147,7 @@ Compose declares `mongodb_data` for `/data/db` and `uploads_data` for `/app/uplo
 Their actual names have the Compose project prefix. Ordinary restarts, image
 rebuilds, and `docker compose down` preserve them. `down --volumes` deletes them.
 The existing application stores global records in `modl` and operational records
-in `modl_instance`; back up the whole MongoDB instance, not just the database name
+in `modl_instance`; replay training also uses `training_data`. Back up the whole MongoDB instance, not just the database name
 at the end of the URI. Include upload sidecar metadata and your `.env` secret.
 
 For a consistent maintenance backup, stop application writes while MongoDB remains
@@ -219,3 +219,4 @@ URLs from ticket IDs must obtain a signed link instead; the panel endpoint is
 `GET /api/v1/panel/tickets/{id}/access-link` with a staff session. Review this when
 connecting an existing Minecraft plugin, since the plugin is outside these three
 source repositories.
+
