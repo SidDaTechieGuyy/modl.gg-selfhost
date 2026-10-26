@@ -1,0 +1,251 @@
+import React, { useState } from 'react';
+import { Shield, FileText, Image, Video, Eye, Trash2, Loader2 } from 'lucide-react';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@modl-gg/shared-web/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@modl-gg/shared-web/components/ui/alert-dialog';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import MediaUpload from './MediaUpload';
+import { useMediaUpload } from '@/hooks/use-media-upload';
+import { formatFileSize } from '@/utils/file-utils';
+import { useTranslation } from 'react-i18next';
+import { useAuth } from '@/hooks/use-auth';
+
+interface EvidenceItem {
+  id: string;
+  url: string;
+  key: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  uploadedAt: string;
+  uploadedBy: string;
+  category?: string;
+}
+
+interface EvidenceUploadProps {
+  playerId?: string;
+  ticketId?: string;
+  category?: string;
+  existingEvidence?: EvidenceItem[];
+  onEvidenceUpdate?: (evidence: EvidenceItem[]) => void;
+  readonly?: boolean;
+}
+
+export function EvidenceUpload({
+  playerId,
+  ticketId,
+  category = 'general',
+  existingEvidence = [],
+  onEvidenceUpdate,
+  readonly = false
+}: EvidenceUploadProps) {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const [evidence, setEvidence] = useState<EvidenceItem[]>(existingEvidence);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const { deleteMedia } = useMediaUpload();
+  const { toast } = useToast();
+
+  const handleUploadComplete = (result: { url: string; key: string }, file?: File) => {
+    // Use actual file info if available, otherwise extract from URL
+    const fileName = file?.name || result.url.split('/').pop() || 'uploaded-file';
+    
+    const newEvidence: EvidenceItem = {
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      url: result.url,
+      key: result.key,
+      fileName: fileName,
+      fileType: file?.type || 'application/octet-stream',
+      fileSize: file?.size || 0,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: user?.username || user?.email || 'Unknown',
+      category
+    };
+
+    setEvidence(prev => {
+      const updatedEvidence = [...prev, newEvidence];
+      onEvidenceUpdate?.(updatedEvidence);
+      return updatedEvidence;
+    });
+
+    toast({
+      title: t('upload.evidenceUploaded'),
+      description: t('upload.uploadedSuccess', { name: fileName }),
+    });
+  };
+
+  const handleDeleteEvidence = async (evidenceItem: EvidenceItem) => {
+    setDeletingIds(prev => {
+      const next = new Set(prev);
+      next.add(evidenceItem.id);
+      return next;
+    });
+    try {
+      await deleteMedia(evidenceItem.key);
+      const updatedEvidence = evidence.filter(e => e.id !== evidenceItem.id);
+      setEvidence(updatedEvidence);
+      onEvidenceUpdate?.(updatedEvidence);
+
+      toast({
+        title: t('upload.evidenceDeleted'),
+        description: t('upload.deletedSuccess', { name: evidenceItem.fileName }),
+      });
+    } catch (error) {
+      toast({
+        title: t('upload.deleteFailed'),
+        description: t('upload.deleteEvidenceFailed'),
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingIds(prev => {
+        const next = new Set(prev);
+        next.delete(evidenceItem.id);
+        return next;
+      });
+    }
+  };
+
+  const getFileIcon = (type: string) => {
+    if (type.startsWith('image/')) return <Image className="h-4 w-4" />;
+    if (type.startsWith('video/')) return <Video className="h-4 w-4" />;
+    return <FileText className="h-4 w-4" />;
+  };
+
+  const isImage = (type: string) => type.startsWith('image/');
+  const isVideo = (type: string) => type.startsWith('video/');
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Shield className="h-5 w-5" />
+          {t('upload.evidenceUpload')}
+          {evidence.length > 0 && (
+            <Badge variant="secondary">{evidence.length}</Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!readonly && (
+          <MediaUpload
+            uploadType="evidence"
+            onUploadComplete={handleUploadComplete}
+            metadata={{
+              playerId,
+              ticketId,
+              category
+            }}
+            variant="compact"
+          />
+        )}
+
+        {evidence.length > 0 && (
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium">{t('upload.uploadedEvidence')}</h4>
+            {evidence.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between p-3 bg-muted/50 rounded-lg"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  {getFileIcon(item.fileType)}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{item.fileName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatFileSize(item.fileSize)} • {new Date(item.uploadedAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button variant="ghost" size="sm">
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-4xl">
+                      <DialogHeader>
+                        <DialogTitle>{item.fileName}</DialogTitle>
+                        <DialogDescription className="sr-only">
+                          {t('common.attachmentPreviewDesc')}
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="mt-4">
+                        {isImage(item.fileType) ? (
+                          <img 
+                            src={item.url} 
+                            alt={item.fileName}
+                            className="max-w-full h-auto rounded-lg"
+                          />
+                        ) : isVideo(item.fileType) ? (
+                          <video 
+                            src={item.url} 
+                            controls 
+                            className="max-w-full h-auto rounded-lg"
+                          />
+                        ) : (
+                          <div className="p-8 text-center">
+                            <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                            <p className="text-sm text-muted-foreground mb-4">
+                              {t('upload.previewNotAvailable')}
+                            </p>
+                            <Button asChild>
+                              <a href={item.url} target="_blank" rel="noopener noreferrer">
+                                {t('upload.downloadFile')}
+                              </a>
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+
+                  {!readonly && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label="Delete evidence"
+                          disabled={deletingIds.has(item.id)}
+                        >
+                          {deletingIds.has(item.id) ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>{t('upload.deleteEvidenceTitle', 'Delete evidence?')}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t('upload.deleteEvidenceConfirm', { name: item.fileName, defaultValue: 'This will permanently remove "{{name}}". This action cannot be undone.' })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleDeleteEvidence(item)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            {t('common.delete')}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default EvidenceUpload;

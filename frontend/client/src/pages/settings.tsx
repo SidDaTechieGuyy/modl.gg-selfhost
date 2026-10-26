@@ -1,0 +1,4520 @@
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Scale, Plus, X, Trash2, MessageCircle, Save, CheckCircle, BookOpen, Settings as SettingsIcon, ChevronDown, ChevronRight, Layers, GripVertical, Edit3, Users, FileText } from 'lucide-react';
+import { getApiUrl, apiFetch, apiUpload } from '@/lib/api';
+import { DEFAULT_DATE_FORMAT, setDateLocale, setDateFormat as setDateFormatUtil } from '@/utils/date-utils';
+import i18n from '@/lib/i18n';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent } from '@modl-gg/shared-web/components/ui/card';
+import { useSidebar } from '@/hooks/use-sidebar';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@modl-gg/shared-web/components/ui/tabs';
+import { Switch } from '@modl-gg/shared-web/components/ui/switch';
+import { Label } from '@modl-gg/shared-web/components/ui/label';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { Checkbox } from '@modl-gg/shared-web/components/ui/checkbox';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@modl-gg/shared-web/components/ui/select';
+import { useSettings, usePunishmentTypes, useTicketFormSettings, useQuickResponses, useStatusThresholds, useTicketLabelSettings } from '@/hooks/use-data';
+import PageContainer from '@/components/layout/PageContainer'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@modl-gg/shared-web/components/ui/dialog";
+import { queryClient } from '@/lib/queryClient';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@modl-gg/shared-web/components/ui/tooltip";
+import { useAuth } from '@/hooks/use-auth';
+import { usePublicSettings } from '@/hooks/use-public-settings';
+import { resolveLanguage } from '@/hooks/use-language-preference';
+import { PERMISSIONS, usePermissions, type SettingsTab } from '@/hooks/use-permissions';
+import StaffManagementPanel from '@/components/settings/StaffManagementPanel';
+import StaffRolesCard from '@/components/settings/StaffRolesCard';
+import KnowledgebaseSettings from '@/components/settings/KnowledgebaseSettings';
+import HomepageCardSettings from '@/components/settings/HomepageCardSettings';
+import AccountSettings from '@/components/settings/AccountSettings';
+import GeneralSettings from '@/components/settings/GeneralSettings';
+import PunishmentSettings from '@/components/settings/PunishmentSettings';
+import TicketSettings, { isTicketSettingsSection } from '@/components/settings/TicketSettings';
+import TicketAiModerationSettings from '@/components/settings/TicketAiModerationSettings';
+import type { AIModerationSettings, AIPunishmentConfig } from '@/components/settings/TicketAiModerationSettings';
+import type { PunishmentType as ProtoPunishmentType } from '@modl-gg/proto/modl/v1/settings_pb.ts';
+import { DndProvider, useDrag, useDrop } from 'react-dnd';
+import { HTML5Backend } from 'react-dnd-html5-backend';
+import { type QuickResponsesConfiguration, type QuickResponseCategory, type QuickResponseAction, defaultQuickResponsesConfig } from '@/types/quickResponses';
+import {
+  accessibleSubCategories,
+  resolveSubCategoryId,
+  type SettingsSubCategoryAccess,
+} from '@/lib/settings-access';
+import type {
+  AppealFormField,
+  AppealFormSection,
+  AppealFormSettings,
+  TicketFormField,
+  TicketFormSection,
+  TicketFormsConfiguration,
+} from '@/types/forms';
+import type { WebhookSettings as WebhookSettingsData } from '@/components/settings/WebhookSettings';
+
+// Type definitions for punishment types
+interface PunishmentType {
+  id: number;
+  name: string;
+  category: 'Gameplay' | 'Social' | 'Administrative';
+  isCustomizable: boolean;
+  ordinal: number;
+  durations?: {
+    low: {
+      first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+      medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+      habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+    };
+    regular: {
+      first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+      medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+      habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+    };
+    severe: {
+      first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+      medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+      habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+    };
+  };
+  points?: {
+    low: number;
+    regular: number;
+    severe: number;
+  };
+  customPoints?: number; // For permanent punishments that don't use severity-based points
+  appealForm?: AppealFormSettings; // Punishment-specific appeal form configuration
+  staffDescription?: string; // Description shown to staff when applying this punishment
+  playerDescription?: string; // Description shown to players (in appeals, notifications, etc.)
+  canBeAltBlocking?: boolean; // Whether this punishment can block alternative accounts
+  canBeStatWiping?: boolean; // Whether this punishment can wipe player statistics
+  isAppealable?: boolean; // Whether this punishment type can be appealed
+  singleSeverityPunishment?: boolean; // Whether this punishment uses single severity instead of three levels
+  singleSeverityDurations?: {
+    first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+    medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+    habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban' | 'permanent mute' | 'permanent ban'; };
+  };
+  singleSeverityPoints?: number; // Points for single severity punishments
+  permanentUntilUsernameChange?: boolean; // Whether this punishment persists until player changes username
+  permanentUntilSkinChange?: boolean; // Whether this punishment persists until player changes skin
+}
+
+// Type definition for offender status thresholds
+interface StatusThresholds {
+  gameplay: {
+    medium: number;  // Points threshold for medium offender status
+    habitual: number; // Points threshold for habitual offender status
+    pointExpiryMonths: number; // Months after punishment expiry that points still count
+  };
+  social: {
+    medium: number;  // Points threshold for medium offender status
+    habitual: number; // Points threshold for habitual offender status
+    pointExpiryMonths: number; // Months after punishment expiry that points still count
+  };
+}
+
+interface AIServicePunishmentType {
+  id: number;
+  name: string;
+  category: string;
+  aiDescription: string;
+  enabled: boolean;
+  ordinal: number;
+}
+
+
+interface AvailablePunishmentType {
+  id: number;
+  name: string;
+  category: string;
+  ordinal: number;
+}
+
+type GeneralSettingsData = {
+  serverDisplayName?: string;
+  discordWebhookUrl?: string;
+  homepageIconUrl?: string;
+  panelIconUrl?: string;
+  defaultLanguage?: string;
+};
+
+interface LegacyPunishmentFields {
+  customizable?: boolean;
+  appealable?: boolean;
+  administrative?: boolean;
+  social?: boolean;
+  gameplay?: boolean;
+}
+
+interface ApplySettingsInput extends GeneralSettingsData {
+  punishmentTypes?: unknown;
+  statusThresholds?: unknown;
+  labels?: unknown;
+  bugReportTags?: unknown;
+  playerReportTags?: unknown;
+  appealTags?: unknown;
+  ticketForms?: unknown;
+  quickResponses?: unknown;
+  mongodbUri?: string;
+  has2FA?: boolean;
+  hasPasskey?: boolean;
+  general?: GeneralSettingsData;
+  aiModerationSettings?: unknown;
+}
+
+// Draggable Appeal Form Section Card Component
+interface DraggableAppealFormSectionCardProps {
+  section: AppealFormSection;
+  index: number;
+  moveSection: (dragIndex: number, hoverIndex: number) => void;
+  selectedPunishment: PunishmentType;
+  onEditSection: (section: AppealFormSection) => void;
+  onDeleteSection: (sectionId: string) => void;
+  onEditField: (field: AppealFormField) => void;
+  onDeleteField: (fieldId: string) => void;
+  onAddField: (sectionId: string) => void;
+  moveField: (dragIndex: number, hoverIndex: number, sectionId: string) => void;
+  moveFieldBetweenSections: (fieldId: string, fromSectionId: string, toSectionId: string, targetIndex?: number) => void;
+}
+
+const DraggableAppealFormSectionCard = ({ 
+  section, 
+  index, 
+  moveSection, 
+  selectedPunishment,
+  onEditSection,
+  onDeleteSection,
+  onEditField,
+  onDeleteField,
+  onAddField,
+  moveField,
+  moveFieldBetweenSections
+}: DraggableAppealFormSectionCardProps) => {
+  const [{ isDragging }, drag] = useDrag({
+    type: 'appeal-section',
+    item: { index },
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  });
+
+  const [, drop] = useDrop({
+    accept: 'appeal-section',
+    hover: (item: { index: number }) => {
+      if (item.index !== index) {
+        moveSection(item.index, index);
+        item.index = index;
+      }
+    },
+  });
+
+  const sectionFields = selectedPunishment.appealForm?.fields
+    ?.filter(field => field.sectionId === section.id)
+    ?.sort((a, b) => a.order - b.order) || [];
+
+  return (
+    <div
+      ref={(node) => drag(drop(node))}
+      className={`border rounded-lg p-4 bg-card space-y-3 ${
+        isDragging ? 'opacity-50' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <GripVertical className="h-4 w-4 text-muted-foreground cursor-move" />
+          <div>
+            <div className="flex items-center gap-2">
+              <h6 className="font-medium">{section.title}</h6>
+              {section.hideByDefault && (
+                <Badge variant="secondary" className="text-xs">
+                  Hidden by default
+                </Badge>
+              )}
+            </div>
+            {section.description && (
+              <p className="text-sm text-muted-foreground mt-1">{section.description}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onEditSection(section)}
+            className="h-8 px-2"
+          >
+            <Edit3 className="h-3 w-3" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onDeleteSection(section.id)}
+            className="h-8 px-2 text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Fields in this section */}
+      <div className="space-y-2">
+        {sectionFields.map((field, fieldIndex) => (
+          <DraggableAppealFormFieldCard
+            key={field.id}
+            field={field}
+            index={fieldIndex}
+            sectionId={section.id}
+            moveField={moveField}
+            moveFieldBetweenSections={moveFieldBetweenSections}
+            onEditField={onEditField}
+            onDeleteField={onDeleteField}
+          />
+        ))}
+        
+        {/* Drop zone for adding fields from other sections */}
+        <AppealFormFieldDropZone
+          sectionId={section.id}
+          moveFieldBetweenSections={moveFieldBetweenSections}
+        />
+        
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onAddField(section.id)}
+          className="w-full"
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Add Field
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+// Draggable Appeal Form Field Card Component
+interface DraggableAppealFormFieldCardProps {
+  field: AppealFormField;
+  index: number;
+  sectionId: string;
+  moveField: (dragIndex: number, hoverIndex: number, sectionId: string) => void;
+  moveFieldBetweenSections: (fieldId: string, fromSectionId: string, toSectionId: string, targetIndex?: number) => void;
+  onEditField: (field: AppealFormField) => void;
+  onDeleteField: (fieldId: string) => void;
+}
+
+const DraggableAppealFormFieldCard = ({ 
+  field, 
+  index, 
+  sectionId, 
+  moveField, 
+  moveFieldBetweenSections,
+  onEditField, 
+  onDeleteField 
+}: DraggableAppealFormFieldCardProps) => {
+  const [{ isDragging }, drag] = useDrag({
+    type: 'appeal-field',
+    item: { index, sectionId, fieldId: field.id },
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  });
+
+  const [, drop] = useDrop({
+    accept: 'appeal-field',
+    hover: (item: { index: number; sectionId: string; fieldId: string }) => {
+      // Allow movement within the same section
+      if (item.sectionId === sectionId && item.index !== index) {
+        moveField(item.index, index, sectionId);
+        item.index = index;
+      }
+    },
+    drop: (item: { index: number; sectionId: string; fieldId: string }) => {
+      // Handle cross-section movement
+      if (item.sectionId !== sectionId) {
+        moveFieldBetweenSections(item.fieldId, item.sectionId, sectionId, index);
+      }
+    },
+  });
+
+  const getFieldTypeLabel = (type: string) => {
+    switch (type) {
+      case 'text': return 'Text';
+      case 'textarea': return 'Textarea';
+      case 'dropdown': return 'Dropdown';
+      case 'multiple_choice': return 'Multiple Choice';
+      case 'checkbox': return 'Checkbox';
+      case 'file_upload': return 'File Upload';
+      case 'checkboxes': return 'Checkboxes';
+      default: return type;
+    }
+  };
+
+  return (
+    <div
+      ref={(node) => drag(drop(node))}
+      className={`border rounded p-3 bg-muted/50 ${
+        isDragging ? 'opacity-50' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <GripVertical className="h-3 w-3 text-muted-foreground cursor-move" />
+          <div>
+            <p className="text-sm font-medium">{field.label}</p>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{getFieldTypeLabel(field.type)}</span>
+              {field.required && <span className="text-destructive">*</span>}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onEditField(field)}
+            className="h-7 px-2"
+          >
+            <Edit3 className="h-3 w-3" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onDeleteField(field.id)}
+            className="h-7 px-2 text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Appeal Form Field Drop Zone Component
+interface AppealFormFieldDropZoneProps {
+  sectionId: string;
+  moveFieldBetweenSections: (fieldId: string, fromSectionId: string, toSectionId: string, targetIndex?: number) => void;
+}
+
+const AppealFormFieldDropZone = ({ sectionId, moveFieldBetweenSections }: AppealFormFieldDropZoneProps) => {
+  const [{ isOver, canDrop }, drop] = useDrop({
+    accept: 'appeal-field',
+    drop: (item: { index: number; sectionId: string; fieldId: string }) => {
+      // Only handle cross-section drops
+      if (item.sectionId !== sectionId) {
+        moveFieldBetweenSections(item.fieldId, item.sectionId, sectionId);
+      }
+    },
+    canDrop: (item: { index: number; sectionId: string; fieldId: string }) => {
+      // Only allow drops from other sections
+      return item.sectionId !== sectionId;
+    },
+    collect: (monitor) => ({
+      isOver: monitor.isOver(),
+      canDrop: monitor.canDrop(),
+    }),
+  });
+
+  return (
+    <div
+      ref={drop}
+      className={`border-2 border-dashed rounded-lg p-2 text-center text-sm transition-colors ${
+        isOver && canDrop
+          ? 'border-primary bg-primary/10 text-primary'
+          : canDrop
+          ? 'border-muted-foreground/50 text-muted-foreground'
+          : 'border-transparent'
+      }`}
+    >
+      {isOver && canDrop ? (
+        <span>Drop field here</span>
+      ) : canDrop ? (
+        <span className="opacity-50">Drop fields from other sections here</span>
+      ) : (
+        <span className="opacity-0">Drop zone</span>
+      )}
+    </div>
+  );
+};
+
+const Settings = () => {
+  const { t } = useTranslation();
+  useSidebar();
+  const { user } = useAuth();
+  const { data: publicSettings } = usePublicSettings();
+  const { canAccessSettingsTab, hasPermission, isSuperAdmin } = usePermissions();
+  const canViewAdminSettings = hasPermission(PERMISSIONS.ADMIN_SETTINGS_VIEW);
+  const subCategoryAccess = useMemo<SettingsSubCategoryAccess>(
+    () => ({ isSuperAdmin, hasPermission }),
+    [isSuperAdmin, hasPermission]
+  );
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+  const [expandedSubCategory, setExpandedSubCategory] = useState<string | null>(null);
+
+  // Update URL when category changes
+  const updateURL = (category: string | null, subCategory?: string | null) => {
+    const url = new URL(window.location.href);
+    if (category) {
+      url.searchParams.set('category', category);
+    } else {
+      url.searchParams.delete('category');
+    }
+    if (subCategory) {
+      url.searchParams.set('sub', subCategory);
+    } else {
+      url.searchParams.delete('sub');
+    }
+    window.history.replaceState({}, '', url.toString());
+  };
+
+  // Initialize from URL parameters
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlCategory = urlParams.get('category') || urlParams.get('tab'); // Support legacy tab param
+    const urlSubCategory = urlParams.get('sub') || urlParams.get('section');
+
+    // If URL has category parameter, validate and set it
+    if (urlCategory && user) {
+      // Map legacy tab names to new category names
+      const categoryMap: Record<string, string> = {
+        'tags': 'tickets',
+        'homepage': 'knowledgebase',
+      };
+      const mappedCategory = categoryMap[urlCategory] || urlCategory;
+      const categoryPermissionKey: Record<string, string> = { tickets: 'tags' };
+      const accessPermissionKey = categoryPermissionKey[mappedCategory] || mappedCategory;
+
+      // Check if user can access the requested category
+      if (canAccessSettingsTab(accessPermissionKey as SettingsTab)) {
+        setExpandedCategory(mappedCategory);
+        if (urlSubCategory) {
+          const requestedSubCategory = urlSubCategory.split(',')[0] ?? urlSubCategory;
+          setExpandedSubCategory(resolveSubCategoryId(mappedCategory, requestedSubCategory, subCategoryAccess));
+        }
+      }
+    }
+  }, [user, isSuperAdmin, canAccessSettingsTab, subCategoryAccess]);
+
+  // Handle sub-category selection - only one can be selected at a time
+  const handleSubCategorySelect = (category: string, subCategory: string) => {
+    // If clicking the same sub-category, deselect it
+    if (expandedCategory === category && expandedSubCategory === subCategory) {
+      setExpandedCategory(null);
+      setExpandedSubCategory(null);
+      updateURL(null, null);
+    } else {
+      setExpandedCategory(category);
+      setExpandedSubCategory(subCategory);
+      updateURL(category, subCategory);
+    }
+  };
+  
+  // Auto-save state
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const profileSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Separate timeout for profile
+  const initialSettingsRef = useRef<unknown>(null);
+  const justLoadedFromServerRef = useRef(true);
+  const pendingChangesRef = useRef(false);
+  const initialLoadCompletedRef = useRef(false);
+  const dirtyCategoriesRef = useRef<Set<string>>(new Set());
+
+  const [generalVersion, setGeneralVersion] = useState(0);
+  const [quickResponsesVersion, setQuickResponsesVersion] = useState(0);
+  const [ticketFormsVersion, setTicketFormsVersion] = useState(0);
+  const [statusThresholdsVersion, setStatusThresholdsVersion] = useState(0);
+  const [ticketLabelsVersion, setTicketLabelsVersion] = useState(0);
+
+  const generalSnapshotRef = useRef({
+    serverDisplayName: '',
+    discordWebhookUrl: '',
+    homepageIconUrl: '',
+    panelIconUrl: '',
+    defaultLanguage: 'en',
+  });
+  const quickResponsesSnapshotRef = useRef<QuickResponsesConfiguration>(defaultQuickResponsesConfig);
+  const ticketFormsSnapshotRef = useRef<TicketFormsConfiguration>({
+    bug: { fields: [], sections: [] },
+    support: { fields: [], sections: [] },
+    application: { fields: [], sections: [] }
+  });
+  const statusThresholdsSnapshotRef = useRef<StatusThresholds>({
+    gameplay: { medium: 5, habitual: 10, pointExpiryMonths: 24 },
+    social: { medium: 4, habitual: 8, pointExpiryMonths: 24 }
+  });
+  const ticketLabelsSnapshotRef = useRef<Label[]>([]);
+
+  const hasDeepChanges = (current: unknown, snapshot: unknown): boolean => {
+    return JSON.stringify(current) !== JSON.stringify(snapshot);
+  };
+
+  const toSettingsEnvelope = <T,>(value: unknown): { data: T; _meta?: { version?: number; updatedAt?: string | null } } => {
+    if (value && typeof value === 'object' && 'data' in value) {
+      return value as { data: T; _meta?: { version?: number; updatedAt?: string | null } };
+    }
+    return { data: value as T, _meta: { version: 0, updatedAt: null } };
+  };
+
+  const applyServerSyncedState = (apply: () => void) => {
+    justLoadedFromServerRef.current = true;
+    apply();
+    setTimeout(() => {
+      justLoadedFromServerRef.current = false;
+    }, 100);
+  };
+  
+  // Refs to capture latest profile values for auto-save
+  const profileUsernameRef = useRef('');
+  const languageRef = useRef('en');
+  const dateFormatRef = useRef(DEFAULT_DATE_FORMAT);
+  const usernameDirtyRef = useRef(false);
+  const languageDirtyRef = useRef(false);
+  const dateFormatDirtyRef = useRef(false);
+
+  // Database connection state
+  const [, setDbConnectionStatus] = useState(false);
+  const [mongodbUri, setMongodbUri] = useState('');
+  const [, setIsTestingConnection] = useState(false);
+  // Punishment types state
+  // State for all settings fields
+  const [punishmentTypesState, setPunishmentTypesState] = useState<PunishmentType[]>([
+    // Administrative punishment types (IDs 0-5, not customizable) - minimal fallback
+    { id: 0, name: 'Kick', category: 'Administrative', isCustomizable: false, ordinal: 0 },
+    { id: 1, name: 'Manual Mute', category: 'Administrative', isCustomizable: false, ordinal: 1 },
+    { id: 2, name: 'Manual Ban', category: 'Administrative', isCustomizable: false, ordinal: 2 },
+    { id: 3, name: 'Security Ban', category: 'Administrative', isCustomizable: false, ordinal: 3 },
+    { id: 4, name: 'Linked Ban', category: 'Administrative', isCustomizable: false, ordinal: 4 },
+    { id: 5, name: 'Blacklist', category: 'Administrative', isCustomizable: false, ordinal: 5 }
+    // Social and Gameplay punishment types are loaded from server during provisioning
+  ]);  const [newPunishmentNameState, setNewPunishmentNameState] = useState('');
+  const [newPunishmentCategoryState, setNewPunishmentCategoryState] = useState<'Gameplay' | 'Social'>('Gameplay');
+
+  // Threshold values for player status levels
+  const [statusThresholdsState, setStatusThresholdsState] = useState<StatusThresholds>({
+    gameplay: {
+      medium: 5,  // 5+ points = medium offender
+      habitual: 10, // 10+ points = habitual offender
+      pointExpiryMonths: 24 // points count for 24 months after punishment expiry
+    },
+    social: {
+      medium: 4,  // 4+ points = medium offender
+      habitual: 8,  // 8+ points = habitual offender
+      pointExpiryMonths: 24 // points count for 24 months after punishment expiry
+    }
+  });
+  // Selected punishment for editing
+  const [selectedPunishmentState, setSelectedPunishmentState] = useState<PunishmentType | null>(null);
+
+  // Appeal form state variables
+  const [selectedAppealField, setSelectedAppealField] = useState<AppealFormField | null>(null);
+  const [selectedAppealSection, setSelectedAppealSection] = useState<AppealFormSection | null>(null);
+  const [isAddAppealFieldDialogOpen, setIsAddAppealFieldDialogOpen] = useState(false);
+  const [isAddAppealSectionDialogOpen, setIsAddAppealSectionDialogOpen] = useState(false);
+  const [newAppealFieldLabel, setNewAppealFieldLabel] = useState('');
+  const [newAppealFieldType, setNewAppealFieldType] = useState<'text' | 'textarea' | 'dropdown' | 'multiple_choice' | 'checkbox' | 'file_upload' | 'checkboxes'>('text');
+  const [newAppealFieldDescription, setNewAppealFieldDescription] = useState('');
+  const [newAppealFieldRequired, setNewAppealFieldRequired] = useState(false);
+  const [newAppealFieldOptions, setNewAppealFieldOptions] = useState<string[]>([]);
+  const [newAppealFieldSectionId, setNewAppealFieldSectionId] = useState('');
+  const [newAppealFieldOptionSectionMapping, setNewAppealFieldOptionSectionMapping] = useState<Record<string, string>>({});
+  const [isAppealOptionNavigationExpanded, setIsAppealOptionNavigationExpanded] = useState(false);
+  const [newAppealSectionTitle, setNewAppealSectionTitle] = useState('');
+  const [newAppealSectionDescription, setNewAppealSectionDescription] = useState('');
+  const [newAppealSectionHideByDefault, setNewAppealSectionHideByDefault] = useState(false);
+  const [newOption, setNewOption] = useState('');
+
+  // Quick responses state for each ticket category
+  const [quickResponsesState, setQuickResponsesState] = useState<QuickResponsesConfiguration>(defaultQuickResponsesConfig);
+
+  // Labels state (new unified system)
+  interface Label {
+    id: string;
+    name: string;
+    color: string;
+    description?: string;
+  }
+  const [labelsState, setLabelsState] = useState<Label[]>([]);
+
+  // Tags state for each ticket category (deprecated - kept for backwards compatibility)
+  const [bugReportTagsState, setBugReportTagsState] = useState<string[]>([
+    'UI Issue', 'Server', 'Performance', 'Crash', 'Game Mechanics'
+  ]);
+  const [playerReportTagsState, setPlayerReportTagsState] = useState<string[]>([
+    'Harassment', 'Cheating', 'Spam', 'Inappropriate Content', 'Griefing'
+  ]);
+  const [appealTagsState, setAppealTagsState] = useState<string[]>([
+    'Ban Appeal', 'Mute Appeal', 'False Positive', 'Second Chance'
+  ]);
+
+  // For new tag input
+  const [newBugTagState, setNewBugTagState] = useState('');
+  const [newPlayerTagState, setNewPlayerTagState] = useState('');
+  const [newAppealTagState, setNewAppealTagState] = useState('');
+  
+  // Ticket Forms Configuration State
+  const [ticketFormsState, setTicketFormsState] = useState<TicketFormsConfiguration>({
+    bug: { fields: [], sections: [] },
+    support: { fields: [], sections: [] },
+    application: { fields: [], sections: [] }
+  });
+  
+  // Form builder states for each ticket type
+  const [selectedTicketFormType, setSelectedTicketFormType] = useState<'bug' | 'support' | 'application'>('bug');
+  const [selectedTicketFormField, setSelectedTicketFormField] = useState<TicketFormField | null>(null);
+  const [selectedTicketFormSection, setSelectedTicketFormSection] = useState<TicketFormSection | null>(null);
+  const [isAddTicketFormFieldDialogOpen, setIsAddTicketFormFieldDialogOpen] = useState(false);
+  const [isAddTicketFormSectionDialogOpen, setIsAddTicketFormSectionDialogOpen] = useState(false);
+  const [newTicketFormFieldLabel, setNewTicketFormFieldLabel] = useState('');
+  const [newTicketFormFieldType, setNewTicketFormFieldType] = useState<'text' | 'textarea' | 'dropdown' | 'multiple_choice' | 'checkbox' | 'file_upload' | 'checkboxes'>('text');
+  const [newTicketFormFieldDescription, setNewTicketFormFieldDescription] = useState('');
+  const [newTicketFormFieldRequired, setNewTicketFormFieldRequired] = useState(false);
+  const [newTicketFormFieldOptions, setNewTicketFormFieldOptions] = useState<string[]>([]);
+  const [newTicketFormFieldSectionId, setNewTicketFormFieldSectionId] = useState('');
+  const [, setNewTicketFormFieldGoToSection] = useState('');
+  const [newTicketFormFieldOptionSectionMapping, setNewTicketFormFieldOptionSectionMapping] = useState<Record<string, string>>({});
+  const [newTicketFormOption, setNewTicketFormOption] = useState('');
+  const [isOptionNavigationExpanded, setIsOptionNavigationExpanded] = useState(false);
+  
+  // Section builder states
+  const [newTicketFormSectionTitle, setNewTicketFormSectionTitle] = useState('');
+  const [newTicketFormSectionDescription, setNewTicketFormSectionDescription] = useState('');
+
+  // Updated AI Punishment Types management state
+  const [availablePunishmentTypes, setAvailablePunishmentTypes] = useState<AvailablePunishmentType[]>([]);
+  const [selectedPunishmentTypeId, setSelectedPunishmentTypeId] = useState<number | null>(null);
+  const [selectedAIPunishmentType, setSelectedAIPunishmentType] = useState<AIServicePunishmentType | null>(null);
+  const [isAddAIPunishmentDialogOpen, setIsAddAIPunishmentDialogOpen] = useState(false);
+  const [newAIPunishmentDescription, setNewAIPunishmentDescription] = useState('');
+
+  // Security tab states
+  const [, setHas2FAState] = useState(false);
+  const [, setHasPasskeyState] = useState(false);
+
+  // General tab states
+  const [serverDisplayName, setServerDisplayName] = useState('');
+  const [defaultLanguage, setDefaultLanguage] = useState('en');
+  const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
+  const [, setHomepageIcon] = useState<File | null>(null);
+  const [, setPanelIcon] = useState<File | null>(null);
+  const [homepageIconUrl, setHomepageIconUrl] = useState('');
+  const [panelIconUrl, setPanelIconUrl] = useState('');
+  const [uploadingHomepageIcon, setUploadingHomepageIcon] = useState(false);
+  const [uploadingPanelIcon, setUploadingPanelIcon] = useState(false);
+
+  // Unified API Key management states
+  const [apiKey, setApiKey] = useState('');
+  const [fullApiKey, setFullApiKey] = useState(''); // Store the full key for copying
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isGeneratingApiKey, setIsGeneratingApiKey] = useState(false);
+  const [isRevokingApiKey, setIsRevokingApiKey] = useState(false);
+  const [apiKeyCopied, setApiKeyCopied] = useState(false);    // Profile settings state
+  const [profileUsernameState, setProfileUsernameState] = useState('');
+  const [languageState, setLanguageState] = useState('en');
+  const [dateFormatState, setDateFormatState] = useState(DEFAULT_DATE_FORMAT);
+  
+  // AI Moderation settings state
+  const [aiModerationSettings, setAiModerationSettings] = useState<AIModerationSettings>({
+    enableAIReview: false,
+    enableAutomatedActions: false,
+    aiPunishmentConfigs: {}
+  });
+  const [isLoadingAiSettings, setIsLoadingAiSettings] = useState(false);
+  const [, setIsSavingAiSettings] = useState(false);
+  
+  const { toast } = useToast();
+  const { data: settingsData, isLoading: isLoadingSettings, isFetching: isFetchingSettings } = useSettings();
+  const { data: ticketFormSettingsData, isLoading: isLoadingTicketForms } = useTicketFormSettings();
+  const { data: punishmentTypesData, isLoading: isLoadingPunishmentTypes } = usePunishmentTypes();
+  const { data: quickResponsesData, isLoading: isLoadingQuickResponses } = useQuickResponses();
+  const { data: statusThresholdsData, isLoading: isLoadingStatusThresholds } = useStatusThresholds();
+  const { data: ticketLabelSettingsData, isLoading: isLoadingTicketLabels } = useTicketLabelSettings();
+  const [currentEmail, setCurrentEmail] = useState('');
+
+  const [savingWebhookSettings, setSavingWebhookSettings] = useState(false);
+
+  const handleWebhookSave = async (webhookSettings: WebhookSettingsData) => {
+    setSavingWebhookSettings(true);
+    try {
+      const csrfFetch = apiFetch;
+      const response = await csrfFetch('/v1/panel/settings/webhooks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(webhookSettings),
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save webhook settings');
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['/v1/settings'] });
+    } catch (error) {
+      console.error('Error saving webhook settings:', error);
+      throw error;
+    } finally {
+      setSavingWebhookSettings(false);
+    }
+  };
+
+  // Create aliases for the state variables to maintain backward compatibility
+  const punishmentTypes = punishmentTypesState;
+  const ticketSettingsPunishmentTypes = punishmentTypes as unknown as ProtoPunishmentType[];
+  const newPunishmentName = newPunishmentNameState;
+  const newPunishmentCategory = newPunishmentCategoryState;
+  const statusThresholds = statusThresholdsState;
+  const selectedPunishment = selectedPunishmentState;
+  const labels = labelsState;
+  const bugReportTags = bugReportTagsState;
+  const playerReportTags = playerReportTagsState;
+  const appealTags = appealTagsState;
+  const newBugTag = newBugTagState;
+  const newPlayerTag = newPlayerTagState;
+  const newAppealTag = newAppealTagState;
+  const ticketForms = ticketFormsState;
+  
+  // Profile settings aliases
+  const profileUsername = profileUsernameState;
+  
+  useEffect(() => {
+    if (user?.email) {
+      setCurrentEmail(user.email);
+    }  }, [user]);  // Initialize profile settings from user data
+  useEffect(() => {
+    if (user) {
+      justLoadedFromServerRef.current = true; // Prevent auto-save during initial load
+      setProfileUsernameState(user.username || '');
+      setDateFormatState(user.dateFormat || DEFAULT_DATE_FORMAT);
+
+      // Initialize the refs with the current values
+      profileUsernameRef.current = user.username || '';
+      dateFormatRef.current = user.dateFormat || DEFAULT_DATE_FORMAT;
+
+      usernameDirtyRef.current = false;
+      languageDirtyRef.current = false;
+      dateFormatDirtyRef.current = false;
+
+      // Mark profile data as loaded after a short delay
+      setTimeout(() => {
+        justLoadedFromServerRef.current = false;
+        if (!initialLoadCompletedRef.current) {
+          initialLoadCompletedRef.current = true;
+        }
+      }, 500);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || languageDirtyRef.current) {
+      return;
+    }
+    const resolved = resolveLanguage(user.language, publicSettings?.defaultLanguage);
+    setLanguageState(resolved);
+    languageRef.current = resolved;
+  }, [user, publicSettings?.defaultLanguage]);
+
+  // Load API key on component mount (only for users with appropriate permissions)
+  useEffect(() => {
+    if (user && isSuperAdmin) {
+      loadApiKey();
+    }
+  }, [user, isSuperAdmin]);
+
+  // File upload functions
+  const uploadIcon = async (file: File, iconType: 'homepage' | 'panel'): Promise<string | null> => {
+    try {
+      const formData = new FormData();
+      formData.append('icon', file);
+
+      const response = await apiUpload(`/v1/panel/settings/upload-icon?iconType=${iconType}`, formData);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Upload failed');
+      }
+
+      const result = await response.json();
+      return result.url;
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast({
+        title: t('settings.page.uploadFailed'),
+        description: error instanceof Error ? error.message : t('settings.page.uploadFailedDesc'),
+        variant: "destructive",
+      });
+      return null;
+    }
+  };
+
+  const handleHomepageIconUpload = async (file: File) => {
+    setUploadingHomepageIcon(true);
+    const uploadedUrl = await uploadIcon(file, 'homepage');
+    if (uploadedUrl) {
+      setHomepageIcon(file);
+      setHomepageIconUrl(uploadedUrl);
+      toast({
+        title: t('settings.page.homepageIconUploaded'),
+        description: t('settings.page.homepageIconUploadedDesc'),
+      });
+    }
+    setUploadingHomepageIcon(false);
+  };
+  const handlePanelIconUpload = async (file: File) => {
+    setUploadingPanelIcon(true);
+    const uploadedUrl = await uploadIcon(file, 'panel');
+    if (uploadedUrl) {
+      setPanelIcon(file);
+      setPanelIconUrl(uploadedUrl);
+      
+      // Refresh webhook settings to get updated avatar URL
+      queryClient.invalidateQueries({ queryKey: ['/v1/settings'] });
+
+      toast({
+        title: t('settings.page.panelIconUploaded'),
+        description: t('settings.page.panelIconUploadedDesc'),
+      });    }
+    setUploadingPanelIcon(false);
+  };
+
+  // Unified API Key management functions
+  const loadApiKey = async () => {
+    try {
+      const response = await apiFetch('/v1/panel/settings/api-keys/panel/exists');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.exists) {
+          setApiKey('•••••••••••••••••••••••••');
+          setFullApiKey('');
+        } else {
+          setApiKey('');
+          setFullApiKey('');
+        }
+      } else {
+        const errorText = await response.text();
+        console.error('Failed to load API key:', response.status, response.statusText, errorText);
+        setApiKey('');
+        setFullApiKey('');
+      }
+    } catch (error) {
+      console.error('Error loading API key:', error);
+      setApiKey('');
+      setFullApiKey('');
+    }
+  };
+
+  const generateApiKey = async () => {
+    setIsGeneratingApiKey(true);
+    try {
+      const csrfFetch = apiFetch;
+      const response = await csrfFetch('/v1/panel/settings/api-keys/panel/generate', {
+        method: 'POST',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setFullApiKey(data.apiKey); // Store the full key for copying
+        setApiKey(data.apiKey); // Display the full key initially
+        setShowApiKey(true);
+        toast({
+          title: t('settings.page.apiKeyGenerated'),
+          description: t('settings.page.apiKeyGeneratedDesc'),
+        });
+      } else {
+        throw new Error('Failed to generate API key');
+      }
+    } catch (error) {
+      console.error('Error generating API key:', error);
+      toast({
+        title: t('toast.error'),
+        description: t('settings.page.generateApiKeyFailed'),
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingApiKey(false);
+    }
+  };
+
+  const revokeApiKey = async () => {
+    setIsRevokingApiKey(true);
+    try {
+      const csrfFetch = apiFetch;
+      const response = await csrfFetch('/v1/panel/settings/api-keys/panel', {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        setApiKey('');
+        setFullApiKey('');
+        setShowApiKey(false);
+        toast({
+          title: t('settings.page.apiKeyRevoked'),
+          description: t('settings.page.apiKeyRevokedDesc'),
+        });
+      } else {
+        throw new Error('Failed to revoke API key');
+      }
+    } catch (error) {
+      console.error('Error revoking API key:', error);
+      toast({
+        title: t('toast.error'),
+        description: t('settings.page.revokeApiKeyFailed'),
+        variant: "destructive",
+      });
+    } finally {
+      setIsRevokingApiKey(false);
+    }
+  };
+
+  const revealApiKey = async () => {
+    if (showApiKey) {
+      // Hide the key
+      setShowApiKey(false);
+      return;
+    }
+    
+    // Show the key - fetch full key if we don't have it
+    if (!fullApiKey) {
+      try {
+        const response = await apiFetch('/v1/panel/settings/api-keys/panel/reveal');
+        if (response.ok) {
+          const data = await response.json();
+          setFullApiKey(data.apiKey);
+          setApiKey(data.apiKey);
+        } else {
+          throw new Error('Failed to reveal API key');
+        }
+      } catch (error) {
+        console.error('Error revealing API key:', error);
+        toast({
+          title: t('toast.error'),
+          description: t('settings.page.revealApiKeyFailed'),
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+    
+    setShowApiKey(true);
+  };
+
+  const copyApiKey = () => {
+    // Use fullApiKey if available, otherwise use apiKey if shown
+    const keyToCopy = fullApiKey || (showApiKey ? apiKey : '');
+    
+    if (keyToCopy && !keyToCopy.includes('•••')) {
+      navigator.clipboard.writeText(keyToCopy);
+      setApiKeyCopied(true);
+      setTimeout(() => setApiKeyCopied(false), 2000);
+      toast({
+        title: t('common.copied'),
+        description: t('settings.page.apiKeyCopied'),
+      });
+    } else {
+      toast({
+        title: t('settings.page.cannotCopyMaskedKey'),
+        description: t('settings.page.cannotCopyMaskedKeyDesc'),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const maskApiKey = (key: string) => {
+    if (!key) return '';
+    return key.substring(0, 8) + '••••••••••••••••••••••••' + key.substring(key.length - 4);
+  };
+
+  // AI Moderation settings functions
+  const loadAiModerationSettings = async () => {
+    setIsLoadingAiSettings(true);
+    try {
+      const response = await fetch(getApiUrl('/v1/panel/settings/ai-moderation'), {
+        credentials: 'include',
+        headers: {  }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Merge with defaults to ensure all properties exist
+        setAiModerationSettings(prev => ({
+          ...prev,
+          ...data,
+          aiPunishmentConfigs: data.aiPunishmentConfigs || prev.aiPunishmentConfigs || {}
+        }));
+      } else {
+        console.error('Failed to load AI moderation settings:', response.status);
+      }
+    } catch (error) {
+      console.error('Error loading AI moderation settings:', error);
+    } finally {
+      setIsLoadingAiSettings(false);
+    }
+  };
+
+  const saveAiModerationSettings = async (settings: AIModerationSettings, configs?: Record<string, AIPunishmentConfig>) => {
+    setIsSavingAiSettings(true);
+    try {
+      const payload = {
+        ...settings,
+        aiPunishmentConfigs: configs || settings.aiPunishmentConfigs
+      };
+      
+      const csrfFetch = apiFetch;
+      await csrfFetch('/v1/panel/settings/ai-moderation', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+    } catch (error) {
+      console.error('Error saving AI moderation settings:', error);
+      toast({
+        title: t('toast.error'),
+        description: "Failed to save AI moderation settings. Please try again.",
+        variant: "destructive",
+      });
+      
+    } finally {
+      setIsSavingAiSettings(false);
+    }
+  };
+
+  // Load available punishment types for selection
+  const loadAvailablePunishmentTypes = async () => {
+    try {
+      const response = await fetch(getApiUrl('/v1/panel/settings/punishment-types'), {
+        credentials: 'include',
+        headers: {  }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAvailablePunishmentTypes(data);
+      } else {
+        console.error('Failed to load available punishment types:', response.status);
+      }
+    } catch (error) {
+      console.error('Error loading available punishment types:', error);
+    }
+  };
+
+  // Add AI punishment type configuration
+  const addAiPunishmentType = async (punishmentTypeId: number, aiDescription: string) => {
+    try {
+      const csrfFetch = apiFetch;
+      const response = await csrfFetch('/v1/panel/settings/ai-punishment-types', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ punishmentTypeId, aiDescription }),
+      });
+      
+      if (response.ok) {
+        toast({
+          title: t('settings.page.aiTypeAdded'),
+          description: t('settings.page.aiTypeAddedDesc'),
+        });
+        await loadAvailablePunishmentTypes();
+      } else {
+        const errorData = await response.json();
+        toast({
+          title: t('toast.error'),
+          description: errorData.message || "Failed to add AI punishment type.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Error adding AI punishment type:', error);
+      toast({
+        title: t('toast.error'),
+        description: "An unexpected error occurred. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Update AI punishment type
+  const updateAiPunishmentType = async (id: number, updates: { enabled?: boolean; aiDescription?: string }) => {
+    try {
+      const csrfFetch = apiFetch;
+      const response = await csrfFetch(`/v1/panel/settings/ai-punishment-types/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+      
+      if (response.ok) {
+        if (updates.enabled === false) {
+          loadAvailablePunishmentTypes();
+        }
+        toast({
+          title: t('settings.page.aiTypeUpdated'),
+          description: t('settings.page.aiTypeUpdatedDesc'),
+        });
+      } else {
+        throw new Error('Failed to update AI punishment type');
+      }
+    } catch (error) {
+      console.error('Error updating AI punishment type:', error);
+      toast({
+        title: t('toast.error'),
+        description: "Failed to update AI punishment type. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Load AI moderation settings on component mount (only for users with appropriate permissions)
+  useEffect(() => {
+    if (user && canViewAdminSettings) {
+      loadAiModerationSettings();
+      loadAvailablePunishmentTypes();
+    }
+  }, [user, canViewAdminSettings]);
+
+  // Auto-save AI moderation settings when they change
+  useEffect(() => {
+    if (!isLoadingAiSettings && initialLoadCompletedRef.current && canViewAdminSettings) {
+      const saveTimeout = setTimeout(() => {
+        saveAiModerationSettings(aiModerationSettings);
+      }, 1000);
+      return () => clearTimeout(saveTimeout);
+    }
+    return undefined;
+  }, [aiModerationSettings, isLoadingAiSettings, canViewAdminSettings]);
+
+  // Define captureInitialSettings first, before it's used anywhere else
+  const captureInitialSettings = useCallback(() => {
+    const currentSettingsSnapshot = {
+      punishmentTypes: JSON.parse(JSON.stringify(punishmentTypes)),
+      statusThresholds: JSON.parse(JSON.stringify(statusThresholds)),
+      labels: JSON.parse(JSON.stringify(labels)),
+      ticketForms: JSON.parse(JSON.stringify(ticketForms)),
+      quickResponses: JSON.parse(JSON.stringify(quickResponsesState)),
+      serverDisplayName,
+      defaultLanguage,
+      discordWebhookUrl,
+      homepageIconUrl,
+      panelIconUrl,
+    };
+    initialSettingsRef.current = currentSettingsSnapshot;
+
+    generalSnapshotRef.current = {
+      serverDisplayName,
+      discordWebhookUrl,
+      homepageIconUrl,
+      panelIconUrl,
+      defaultLanguage,
+    };
+    quickResponsesSnapshotRef.current = JSON.parse(JSON.stringify(quickResponsesState));
+    ticketFormsSnapshotRef.current = JSON.parse(JSON.stringify(ticketForms));
+    statusThresholdsSnapshotRef.current = JSON.parse(JSON.stringify(statusThresholds));
+    ticketLabelsSnapshotRef.current = JSON.parse(JSON.stringify(labels));
+  }, [
+    punishmentTypes,
+    statusThresholds,
+    labels,
+    ticketForms,
+    quickResponsesState,
+    serverDisplayName,
+    defaultLanguage,
+    discordWebhookUrl,
+    homepageIconUrl,
+    panelIconUrl
+  ]);
+
+  // Helper to apply a settings object to all state variables without triggering auto-save
+  const applySettingsObjectToState = useCallback((settingsObject: ApplySettingsInput) => {
+    if (!settingsObject) return;
+
+    justLoadedFromServerRef.current = true;
+
+    // Use direct state setters to avoid triggering auto-save during load
+    if (settingsObject.punishmentTypes) {
+      const pt = settingsObject.punishmentTypes;
+      setPunishmentTypesState(typeof pt === 'string' ? JSON.parse(pt) : JSON.parse(JSON.stringify(pt)));
+    }
+    if (settingsObject.statusThresholds) setStatusThresholdsState(JSON.parse(JSON.stringify(settingsObject.statusThresholds)));
+    // Load labels (new unified system)
+    if (settingsObject.labels) {
+      const lbls = settingsObject.labels;
+      setLabelsState(typeof lbls === 'string' ? JSON.parse(lbls) : JSON.parse(JSON.stringify(lbls)));
+    }
+    // Load deprecated tags for backwards compatibility
+    if (settingsObject.bugReportTags) {
+      const brt = settingsObject.bugReportTags;
+      setBugReportTagsState(typeof brt === 'string' ? JSON.parse(brt) : JSON.parse(JSON.stringify(brt)));
+    }
+    if (settingsObject.playerReportTags) {
+      const prt = settingsObject.playerReportTags;
+      setPlayerReportTagsState(typeof prt === 'string' ? JSON.parse(prt) : JSON.parse(JSON.stringify(prt)));
+    }
+    if (settingsObject.appealTags) {
+      const at = settingsObject.appealTags;
+      setAppealTagsState(typeof at === 'string' ? JSON.parse(at) : JSON.parse(JSON.stringify(at)));
+    }
+    if (settingsObject.ticketForms) {
+      const tf = settingsObject.ticketForms;
+      const parsedTf: TicketFormsConfiguration = typeof tf === 'string' ? JSON.parse(tf) : JSON.parse(JSON.stringify(tf));
+      
+      // Only update if the parsed ticket forms has meaningful data
+      // Check if it has at least one form type with fields or sections
+      const hasData = parsedTf && typeof parsedTf === 'object' &&
+        Object.values(parsedTf).some((form) =>
+          form && (
+            (Array.isArray(form.fields) && form.fields.length > 0) ||
+            (Array.isArray(form.sections) && form.sections.length > 0)
+          )
+        );
+      
+      if (hasData) {
+        setTicketFormsState(parsedTf);
+      }
+    }
+    if (settingsObject.quickResponses) {
+      const qr = settingsObject.quickResponses;
+      const parsedQr = typeof qr === 'string' ? JSON.parse(qr) : JSON.parse(JSON.stringify(qr));
+      
+      // Check if it's the old format (Record<string, Record<string, string>>) and migrate to new format
+      if (parsedQr && !parsedQr.categories && typeof parsedQr === 'object') {
+        // Convert old format to new format
+        const resolveAppealAction = (actionName: string): QuickResponseAction['appealAction'] =>
+          actionName.toLowerCase().includes('pardon') ? 'pardon' :
+          actionName.toLowerCase().includes('reduce') ? 'reduce' :
+          actionName.toLowerCase().includes('reject') ? 'reject' : 'none';
+
+        const categories: QuickResponseCategory[] = Object.entries(parsedQr).map(([categoryName, responses], index) => ({
+          id: categoryName.toLowerCase().replace(/\s+/g, '_'),
+          name: categoryName,
+          ticketTypes: categoryName.toLowerCase().includes('report') ?
+            (categoryName.toLowerCase().includes('chat') ? ['chat_report'] : ['player_report']) :
+            categoryName.toLowerCase().includes('appeal') ? ['appeal'] :
+            categoryName.toLowerCase().includes('bug') ? ['bug_report'] : ['other'],
+          order: index + 1,
+          actions: Object.entries(responses as Record<string, string>).map(([actionName, message], actionIndex) => ({
+            id: `${categoryName.toLowerCase().replace(/\s+/g, '_')}_${actionName.toLowerCase()}`,
+            name: actionName,
+            message: message,
+            order: actionIndex + 1,
+            // Add default properties based on category
+            ...(categoryName.toLowerCase().includes('report') && actionName.toLowerCase().includes('accept') ? { issuePunishment: false } : {}),
+            ...(categoryName.toLowerCase().includes('appeal') ? {
+              appealAction: resolveAppealAction(actionName)
+            } : {})
+          }))
+        }));
+
+        setQuickResponsesState({ categories });
+      } else {
+        // It's already in the new format or use default
+        setQuickResponsesState(parsedQr.categories ? parsedQr : defaultQuickResponsesConfig);
+      }
+    }
+    if (settingsObject.mongodbUri !== undefined) setMongodbUri(settingsObject.mongodbUri);
+    if (settingsObject.has2FA !== undefined) setHas2FAState(settingsObject.has2FA);
+    if (settingsObject.hasPasskey !== undefined) setHasPasskeyState(settingsObject.hasPasskey);
+    
+    // Handle general settings (both direct properties and nested object)
+    if (settingsObject.general) {
+      if (settingsObject.general.serverDisplayName !== undefined) setServerDisplayName(settingsObject.general.serverDisplayName);
+      if (settingsObject.general.defaultLanguage !== undefined) setDefaultLanguage(settingsObject.general.defaultLanguage);
+      if (settingsObject.general.discordWebhookUrl !== undefined) setDiscordWebhookUrl(settingsObject.general.discordWebhookUrl);
+      if (settingsObject.general.homepageIconUrl !== undefined) setHomepageIconUrl(settingsObject.general.homepageIconUrl);
+      if (settingsObject.general.panelIconUrl !== undefined) setPanelIconUrl(settingsObject.general.panelIconUrl);
+    } else {
+      // Fallback for direct properties (backward compatibility)
+      if (settingsObject.serverDisplayName !== undefined) setServerDisplayName(settingsObject.serverDisplayName);
+      if (settingsObject.defaultLanguage !== undefined) setDefaultLanguage(settingsObject.defaultLanguage);
+      if (settingsObject.discordWebhookUrl !== undefined) setDiscordWebhookUrl(settingsObject.discordWebhookUrl);
+      if (settingsObject.homepageIconUrl !== undefined) setHomepageIconUrl(settingsObject.homepageIconUrl);
+      if (settingsObject.panelIconUrl !== undefined) setPanelIconUrl(settingsObject.panelIconUrl);
+    }
+
+    // Handle AI moderation settings
+    if (settingsObject.aiModerationSettings) {
+      const aiSettings = settingsObject.aiModerationSettings;
+      const parsedAiSettings = typeof aiSettings === 'string' ? JSON.parse(aiSettings) : JSON.parse(JSON.stringify(aiSettings));
+      setAiModerationSettings(parsedAiSettings);
+    }
+
+    // After a short delay, reset the flag to allow auto-saving
+    setTimeout(() => {
+      justLoadedFromServerRef.current = false;
+    }, 500);
+  }, []);
+
+  // Save settings to backend - only saves dirty categories
+  const saveSettings = useCallback(async () => {
+    if (justLoadedFromServerRef.current || !initialLoadCompletedRef.current) {
+      return; // Skip saving during initial load
+    }
+
+    const dirty = new Set(dirtyCategoriesRef.current);
+    dirtyCategoriesRef.current.clear();
+
+    if (dirty.size === 0) return;
+
+    setIsSaving(true);
+    pendingChangesRef.current = false;
+
+    try {
+      const csrfFetch = apiFetch;
+      let hasError = false;
+      const failedSections = new Set<string>();
+      const reloadGeneralSettings = async () => {
+        try {
+          const latestGeneralResponse = await csrfFetch('/v1/panel/settings/general');
+          if (!latestGeneralResponse.ok) {
+            return;
+          }
+
+          const latestEnvelope = toSettingsEnvelope<GeneralSettingsData>(await latestGeneralResponse.json());
+          const latestGeneral = {
+            serverDisplayName: latestEnvelope?.data?.serverDisplayName ?? '',
+            discordWebhookUrl: latestEnvelope?.data?.discordWebhookUrl ?? '',
+            homepageIconUrl: latestEnvelope?.data?.homepageIconUrl ?? '',
+            panelIconUrl: latestEnvelope?.data?.panelIconUrl ?? '',
+            defaultLanguage: latestEnvelope?.data?.defaultLanguage || 'en',
+          };
+
+          const latestVersion = Number(latestEnvelope?._meta?.version ?? 0);
+          setGeneralVersion(Number.isFinite(latestVersion) ? latestVersion : 0);
+          applyServerSyncedState(() => {
+            setServerDisplayName(latestGeneral.serverDisplayName);
+            setDiscordWebhookUrl(latestGeneral.discordWebhookUrl);
+            setHomepageIconUrl(latestGeneral.homepageIconUrl);
+            setPanelIconUrl(latestGeneral.panelIconUrl);
+            setDefaultLanguage(latestGeneral.defaultLanguage);
+          });
+          generalSnapshotRef.current = latestGeneral;
+        } catch (reloadError) {
+          console.error('Failed to reload latest general settings:', reloadError);
+        }
+      };
+
+      const handleFailedSave = async (
+        response: Response,
+        sectionLabel: string,
+        queryKey: readonly unknown[],
+        sectionKey: string
+      ) => {
+        hasError = true;
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error(`${sectionLabel} save failed:`, response.status, errorData);
+
+        if (response.status === 409) {
+          toast({
+            title: t('settings.page.updateConflict'),
+            description: t('settings.page.updateConflictDesc', { section: sectionLabel }),
+            variant: "destructive"
+          });
+          if (sectionKey === 'general') {
+            await reloadGeneralSettings();
+          }
+          queryClient.invalidateQueries({ queryKey });
+          return;
+        }
+
+        if (response.status === 403) {
+          toast({
+            title: t('toast.permissionDenied'),
+            description: errorData.error || errorData.message || 'You do not have permission to modify these settings.',
+            variant: "destructive"
+          });
+          if (sectionKey === 'general') {
+            await reloadGeneralSettings();
+          }
+          queryClient.invalidateQueries({ queryKey });
+          return;
+        }
+
+        failedSections.add(sectionKey);
+
+        toast({
+          title: t('toast.error'),
+          description: `Failed to save ${sectionLabel}: ${errorData.error || response.statusText}`,
+          variant: "destructive"
+        });
+      };
+
+      if (dirty.has('general')) {
+        const snapshot = generalSnapshotRef.current;
+        const patch: { expectedVersion: number } & GeneralSettingsData = { expectedVersion: generalVersion };
+        if (serverDisplayName !== snapshot.serverDisplayName) patch.serverDisplayName = serverDisplayName;
+        if (defaultLanguage !== snapshot.defaultLanguage) patch.defaultLanguage = defaultLanguage;
+        if (discordWebhookUrl !== snapshot.discordWebhookUrl) patch.discordWebhookUrl = discordWebhookUrl;
+        if (homepageIconUrl !== snapshot.homepageIconUrl) patch.homepageIconUrl = homepageIconUrl;
+        if (panelIconUrl !== snapshot.panelIconUrl) patch.panelIconUrl = panelIconUrl;
+
+        if (Object.keys(patch).length > 1) {
+          const response = await csrfFetch('/v1/panel/settings/general', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(patch)
+          });
+
+          if (!response.ok) {
+            await handleFailedSave(response, 'general settings', ['/v1/settings'], 'general');
+          } else {
+            const envelope = toSettingsEnvelope<GeneralSettingsData>(await response.json());
+            const canonicalGeneral = envelope?.data || {};
+            const nextVersion = Number(envelope?._meta?.version ?? generalVersion + 1);
+            setGeneralVersion(Number.isFinite(nextVersion) ? nextVersion : generalVersion + 1);
+
+            const nextGeneralSnapshot = {
+              serverDisplayName: canonicalGeneral.serverDisplayName ?? '',
+              discordWebhookUrl: canonicalGeneral.discordWebhookUrl ?? '',
+              homepageIconUrl: canonicalGeneral.homepageIconUrl ?? '',
+              panelIconUrl: canonicalGeneral.panelIconUrl ?? '',
+              defaultLanguage: canonicalGeneral.defaultLanguage || 'en',
+            };
+
+            applyServerSyncedState(() => {
+              setServerDisplayName(nextGeneralSnapshot.serverDisplayName);
+              setDiscordWebhookUrl(nextGeneralSnapshot.discordWebhookUrl);
+              setHomepageIconUrl(nextGeneralSnapshot.homepageIconUrl);
+              setPanelIconUrl(nextGeneralSnapshot.panelIconUrl);
+              setDefaultLanguage(nextGeneralSnapshot.defaultLanguage);
+            });
+
+            generalSnapshotRef.current = nextGeneralSnapshot;
+          }
+        }
+      }
+
+      if (dirty.has('quick-responses')) {
+        const snapshot = quickResponsesSnapshotRef.current;
+        if (hasDeepChanges(quickResponsesState, snapshot)) {
+          const response = await csrfFetch('/v1/panel/settings/quick-responses', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              expectedVersion: quickResponsesVersion,
+              categories: quickResponsesState.categories
+            })
+          });
+
+          if (!response.ok) {
+            await handleFailedSave(response, 'quick responses', ['/v1/panel/settings/quick-responses'], 'quick-responses');
+          } else {
+            const envelope = toSettingsEnvelope<Partial<QuickResponsesConfiguration>>(await response.json());
+            const canonicalQuickResponses = envelope?.data?.categories
+              ? envelope.data
+              : defaultQuickResponsesConfig;
+            const nextVersion = Number(envelope?._meta?.version ?? quickResponsesVersion + 1);
+            setQuickResponsesVersion(Number.isFinite(nextVersion) ? nextVersion : quickResponsesVersion + 1);
+
+            applyServerSyncedState(() => {
+              setQuickResponsesState(JSON.parse(JSON.stringify(canonicalQuickResponses)));
+            });
+            quickResponsesSnapshotRef.current = JSON.parse(JSON.stringify(canonicalQuickResponses));
+          }
+        }
+      }
+
+      if (dirty.has('ticket-forms') && ticketForms) {
+        const snapshot = ticketFormsSnapshotRef.current;
+        if (hasDeepChanges(ticketForms, snapshot)) {
+          const response = await csrfFetch('/v1/panel/settings/ticket-forms', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              expectedVersion: ticketFormsVersion,
+              settings: ticketForms
+            })
+          });
+
+          if (!response.ok) {
+            await handleFailedSave(response, 'ticket forms', ['/v1/panel/settings/ticket-forms'], 'ticket-forms');
+          } else {
+            const envelope = toSettingsEnvelope<TicketFormsConfiguration>(await response.json());
+            const canonicalTicketForms = envelope?.data || ticketForms;
+            const nextVersion = Number(envelope?._meta?.version ?? ticketFormsVersion + 1);
+            setTicketFormsVersion(Number.isFinite(nextVersion) ? nextVersion : ticketFormsVersion + 1);
+
+            applyServerSyncedState(() => {
+              setTicketFormsState(JSON.parse(JSON.stringify(canonicalTicketForms)));
+            });
+            ticketFormsSnapshotRef.current = JSON.parse(JSON.stringify(canonicalTicketForms));
+          }
+        }
+      }
+
+      if (dirty.has('status-thresholds')) {
+        const snapshot = statusThresholdsSnapshotRef.current;
+        if (hasDeepChanges(statusThresholds, snapshot)) {
+          const response = await csrfFetch('/v1/panel/settings/status-thresholds', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              expectedVersion: statusThresholdsVersion,
+              settings: statusThresholds
+            })
+          });
+
+          if (!response.ok) {
+            await handleFailedSave(response, 'status thresholds', ['/v1/panel/settings/status-thresholds'], 'status-thresholds');
+          } else {
+            const envelope = toSettingsEnvelope<StatusThresholds>(await response.json());
+            const canonicalStatusThresholds = envelope?.data?.social && envelope?.data?.gameplay
+              ? envelope.data
+              : statusThresholds;
+            const nextVersion = Number(envelope?._meta?.version ?? statusThresholdsVersion + 1);
+            setStatusThresholdsVersion(Number.isFinite(nextVersion) ? nextVersion : statusThresholdsVersion + 1);
+
+            applyServerSyncedState(() => {
+              setStatusThresholdsState(JSON.parse(JSON.stringify(canonicalStatusThresholds)));
+            });
+            statusThresholdsSnapshotRef.current = JSON.parse(JSON.stringify(canonicalStatusThresholds));
+          }
+        }
+      }
+
+      if (dirty.has('ticket-labels')) {
+        const snapshot = ticketLabelsSnapshotRef.current;
+        if (hasDeepChanges(labels, snapshot)) {
+          const response = await csrfFetch('/v1/panel/settings/ticket-labels', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              expectedVersion: ticketLabelsVersion,
+              labels
+            })
+          });
+
+          if (!response.ok) {
+            await handleFailedSave(response, 'ticket labels', ['/v1/panel/settings/ticket-labels'], 'ticket-labels');
+          } else {
+            const envelope = toSettingsEnvelope<{ labels?: Label[] }>(await response.json());
+            const canonicalLabels = Array.isArray(envelope?.data?.labels) ? envelope.data.labels : [];
+            const nextVersion = Number(envelope?._meta?.version ?? ticketLabelsVersion + 1);
+            setTicketLabelsVersion(Number.isFinite(nextVersion) ? nextVersion : ticketLabelsVersion + 1);
+
+            applyServerSyncedState(() => {
+              setLabelsState(JSON.parse(JSON.stringify(canonicalLabels)));
+            });
+            ticketLabelsSnapshotRef.current = JSON.parse(JSON.stringify(canonicalLabels));
+            queryClient.invalidateQueries({ queryKey: ['/v1/panel/settings/ticket-labels'] });
+          }
+        }
+      }
+
+      if (failedSections.size > 0) {
+        failedSections.forEach(section => dirtyCategoriesRef.current.add(section));
+        pendingChangesRef.current = true;
+      }
+
+      if (!hasError) {
+        setLastSaved(new Date());
+      }
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      dirty.forEach(section => dirtyCategoriesRef.current.add(section));
+      pendingChangesRef.current = true;
+      toast({
+        title: t('toast.error'),
+        description: "An unexpected error occurred while saving",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [
+    serverDisplayName, defaultLanguage, discordWebhookUrl, homepageIconUrl, panelIconUrl,
+    labels, ticketForms, quickResponsesState, statusThresholds,
+    generalVersion, quickResponsesVersion, ticketFormsVersion, statusThresholdsVersion, ticketLabelsVersion, toast,
+    applyServerSyncedState, toSettingsEnvelope
+  ]);
+
+  // Effect: Load settings from React Query into local component state
+  useEffect(() => {
+    if (isLoadingSettings || isFetchingSettings) {
+      return;
+    }
+
+    if (settingsData?.settings && Object.keys(settingsData.settings).length > 0 && !initialLoadCompletedRef.current) {
+      applySettingsObjectToState(settingsData.settings as unknown as ApplySettingsInput);      const loadedGeneralVersion = Number(('generalMeta' in settingsData.settings ? settingsData.settings.generalMeta?.version : undefined) ?? 0);
+      setGeneralVersion(Number.isFinite(loadedGeneralVersion) ? loadedGeneralVersion : 0);
+
+      // Capture settings for future reference and mark initial load as complete
+      // This timeout ensures state updates from applySettingsObjectToState have settled
+      // before capturing and enabling auto-save.
+      setTimeout(() => {
+        captureInitialSettings();        initialLoadCompletedRef.current = true;
+      }, 600); // Delay to ensure state updates propagate
+    } else if (!settingsData?.settings && !initialLoadCompletedRef.current && !isLoadingSettings && !isFetchingSettings) {
+      // This case handles if the API returns no settings (e.g. empty object) on the first load
+      initialLoadCompletedRef.current = true;
+    }
+  }, [settingsData, isLoadingSettings, isFetchingSettings]);
+
+  // Effect: Load punishment types from the dedicated endpoint
+  useEffect(() => {
+    if (isLoadingPunishmentTypes || !punishmentTypesData) {
+      return;
+    }
+
+    // Normalize API data: map backend field names to frontend field names
+    const normalizedTypes = (punishmentTypesData as unknown as (PunishmentType & LegacyPunishmentFields)[])
+      .filter((pt) => pt.ordinal != null)
+      .map((pt) => ({
+        ...pt,
+        id: pt.id ?? pt.ordinal,
+        isCustomizable: pt.isCustomizable ?? pt.customizable ?? false,
+        isAppealable: pt.isAppealable ?? pt.appealable ?? true,
+        category: pt.category || (pt.administrative ? 'Administrative' : pt.social ? 'Social' : pt.gameplay ? 'Gameplay' : 'Administrative')
+      }));
+
+    setPunishmentTypesState(normalizedTypes);
+  }, [punishmentTypesData, isLoadingPunishmentTypes]);
+
+  // Effect: Load ticket forms from the dedicated endpoint
+  useEffect(() => {
+    if (isLoadingTicketForms || !ticketFormSettingsData) {
+      return;
+    }
+
+    const ticketFormEnvelope = toSettingsEnvelope<TicketFormsConfiguration>(ticketFormSettingsData);
+    const ticketFormPayload = ticketFormEnvelope.data;
+    const loadedVersion = Number(ticketFormEnvelope?._meta?.version ?? 0);
+    setTicketFormsVersion(Number.isFinite(loadedVersion) ? loadedVersion : 0);
+
+    // Check if the ticket forms data has meaningful content
+    const hasData = ticketFormPayload && typeof ticketFormPayload === 'object' &&
+      Object.values(ticketFormPayload).some((form) =>
+        form && (
+          (Array.isArray(form.fields) && form.fields.length > 0) ||
+          (Array.isArray(form.sections) && form.sections.length > 0)
+        )
+      );
+
+    if (hasData) {
+      justLoadedFromServerRef.current = true;
+      setTicketFormsState(ticketFormPayload as TicketFormsConfiguration);
+      ticketFormsSnapshotRef.current = JSON.parse(JSON.stringify(ticketFormPayload));
+      setTimeout(() => {
+        justLoadedFromServerRef.current = false;
+      }, 100);
+    }
+  }, [ticketFormSettingsData, isLoadingTicketForms]);
+
+  // Effect: Load quick responses from the dedicated endpoint
+  useEffect(() => {
+    if (isLoadingQuickResponses || !quickResponsesData) {
+      return;
+    }
+
+    const quickResponsesEnvelope = toSettingsEnvelope<Partial<QuickResponsesConfiguration>>(quickResponsesData);
+    const quickResponsesPayload = quickResponsesEnvelope.data;
+    const loadedVersion = Number(quickResponsesEnvelope?._meta?.version ?? 0);
+    setQuickResponsesVersion(Number.isFinite(loadedVersion) ? loadedVersion : 0);
+
+    // Check if quick responses data has categories
+    if (quickResponsesPayload?.categories && Array.isArray(quickResponsesPayload.categories)) {
+      justLoadedFromServerRef.current = true;
+      setQuickResponsesState(quickResponsesPayload as QuickResponsesConfiguration);
+      quickResponsesSnapshotRef.current = JSON.parse(JSON.stringify(quickResponsesPayload));
+      setTimeout(() => {
+        justLoadedFromServerRef.current = false;
+      }, 100);
+    }
+  }, [quickResponsesData, isLoadingQuickResponses]);
+
+  // Effect: Load status thresholds from the dedicated endpoint
+  useEffect(() => {
+    if (isLoadingStatusThresholds || !statusThresholdsData) {
+      return;
+    }
+
+    const statusThresholdEnvelope = toSettingsEnvelope<StatusThresholds>(statusThresholdsData);
+    const statusThresholdPayload = statusThresholdEnvelope.data;
+    const loadedVersion = Number(statusThresholdEnvelope?._meta?.version ?? 0);
+    setStatusThresholdsVersion(Number.isFinite(loadedVersion) ? loadedVersion : 0);
+
+    if (statusThresholdPayload?.social && statusThresholdPayload?.gameplay) {
+      justLoadedFromServerRef.current = true;
+      setStatusThresholdsState(statusThresholdPayload);
+      statusThresholdsSnapshotRef.current = JSON.parse(JSON.stringify(statusThresholdPayload));
+      setTimeout(() => {
+        justLoadedFromServerRef.current = false;
+      }, 100);
+    }
+  }, [statusThresholdsData, isLoadingStatusThresholds]);
+
+  useEffect(() => {
+    if (isLoadingTicketLabels || !ticketLabelSettingsData) {
+      return;
+    }
+
+    const ticketLabelEnvelope = toSettingsEnvelope<{ labels?: Label[] }>(ticketLabelSettingsData);
+    const labelPayload = Array.isArray(ticketLabelEnvelope?.data?.labels)
+      ? ticketLabelEnvelope.data.labels
+      : [];
+    const loadedVersion = Number(ticketLabelEnvelope?._meta?.version ?? 0);
+    setTicketLabelsVersion(Number.isFinite(loadedVersion) ? loadedVersion : 0);
+
+    justLoadedFromServerRef.current = true;
+    setLabelsState(JSON.parse(JSON.stringify(labelPayload)));
+    ticketLabelsSnapshotRef.current = JSON.parse(JSON.stringify(labelPayload));
+    setTimeout(() => {
+      justLoadedFromServerRef.current = false;
+    }, 100);
+  }, [ticketLabelSettingsData, isLoadingTicketLabels]);
+
+  // Track which settings categories are dirty
+  useEffect(() => {
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      dirtyCategoriesRef.current.add('general');
+    }
+  }, [serverDisplayName, defaultLanguage, discordWebhookUrl, homepageIconUrl, panelIconUrl]);
+
+  useEffect(() => {
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      dirtyCategoriesRef.current.add('ticket-labels');
+    }
+  }, [labels]);
+
+  useEffect(() => {
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      dirtyCategoriesRef.current.add('quick-responses');
+    }
+  }, [quickResponsesState]);
+
+  useEffect(() => {
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      dirtyCategoriesRef.current.add('ticket-forms');
+    }
+  }, [ticketForms]);
+
+  useEffect(() => {
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      dirtyCategoriesRef.current.add('status-thresholds');
+    }
+  }, [statusThresholds]);
+
+  // Debounced auto-save effect - only trigger when settings change after initial load
+  useEffect(() => {
+    // Don't auto-save during initial load
+    if (justLoadedFromServerRef.current || !initialLoadCompletedRef.current || isLoadingSettings || isFetchingSettings) {
+      return;
+    }
+
+    // If there's a pending save, clear it
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Set a flag that we have pending changes
+    pendingChangesRef.current = true;
+
+    // Schedule a new save
+    saveTimeoutRef.current = setTimeout(() => {
+      if (pendingChangesRef.current) {
+        saveSettings();
+      }
+    }, 1000); // Auto-save after 1 second of inactivity
+
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };  }, [
+    serverDisplayName, defaultLanguage, discordWebhookUrl, homepageIconUrl, panelIconUrl,
+    labels, ticketForms, quickResponsesState, statusThresholds,
+    // punishmentTypes, mongodbUri, has2FA, hasPasskey removed - they have their own save mechanisms
+    isLoadingSettings, isFetchingSettings, saveSettings
+  ]);
+
+  // Check database connection status on page load
+  useEffect(() => {
+    const checkDbConnection = async () => {
+      if (!mongodbUri) {
+        setDbConnectionStatus(false);
+        return;
+      }
+
+      setIsTestingConnection(true);
+
+      try {
+        const csrfFetch = apiFetch;
+        const response = await csrfFetch('/v1/panel/settings/test-database', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ uri: mongodbUri })
+        });
+
+        const data = await response.json();
+
+        if (data.connected) {
+          setDbConnectionStatus(true);
+        } else {
+          setDbConnectionStatus(false);
+        }
+      } catch (error) {
+        console.error("Database connection check error:", error);
+        setDbConnectionStatus(false);
+      } finally {
+        setIsTestingConnection(false);
+      }
+    };
+
+    checkDbConnection();
+  }, [mongodbUri]);
+
+  // Wrapper functions to set state that trigger auto-save
+  const setPunishmentTypes = (value: React.SetStateAction<PunishmentType[]>) => {
+    // Skip auto-save during initial load
+    if (justLoadedFromServerRef.current || !initialLoadCompletedRef.current) {
+      setPunishmentTypesState(value);
+    } else {
+      setPunishmentTypesState(value);
+    }
+  };
+  const setNewPunishmentName = (value: React.SetStateAction<string>) => {
+    setNewPunishmentNameState(value);
+  };
+  const setNewPunishmentCategory = (value: React.SetStateAction<'Gameplay' | 'Social'>) => {
+    setNewPunishmentCategoryState(value);
+  };
+  const setStatusThresholds = (value: React.SetStateAction<StatusThresholds>) => {
+    setStatusThresholdsState(value);
+  };
+  const setSelectedPunishment = (value: React.SetStateAction<PunishmentType | null>) => {
+    setSelectedPunishmentState(value);
+  };
+  const setNewBugTag = (value: React.SetStateAction<string>) => {
+    setNewBugTagState(value);
+  };
+  const setNewPlayerTag = (value: React.SetStateAction<string>) => {
+    setNewPlayerTagState(value);
+  };
+  const setNewAppealTag = (value: React.SetStateAction<string>) => {
+    setNewAppealTagState(value);
+  };
+
+  // Profile settings auto-save wrapper functions
+  const setProfileUsername = (value: React.SetStateAction<string>) => {
+    const newValue = typeof value === 'function' ? value(profileUsernameState) : value;
+    setProfileUsernameState(newValue);
+    profileUsernameRef.current = newValue;
+
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      usernameDirtyRef.current = true;
+      triggerProfileAutoSave();
+    }
+  };
+
+  const setLanguage = (value: string) => {
+    setLanguageState(value);
+    languageRef.current = value;
+    setDateLocale(value);
+    i18n.changeLanguage(value);
+    if (user) {
+      user.language = value;
+    }
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      languageDirtyRef.current = true;
+      triggerProfileAutoSave();
+    }
+  };
+
+  const setDateFormat = (value: string) => {
+    setDateFormatState(value);
+    dateFormatRef.current = value;
+    setDateFormatUtil(value);
+    if (user) {
+      user.dateFormat = value;
+    }
+    if (!justLoadedFromServerRef.current && initialLoadCompletedRef.current) {
+      dateFormatDirtyRef.current = true;
+      triggerProfileAutoSave();
+    }
+  };
+  
+  // Auto-save function for profile settings
+  const triggerProfileAutoSave = useCallback(() => {
+    if (profileSaveTimeoutRef.current) {
+      clearTimeout(profileSaveTimeoutRef.current);
+    }
+    
+    profileSaveTimeoutRef.current = setTimeout(async () => {
+      // Use refs to get the latest values at execution time
+      const currentUsername = profileUsernameRef.current;
+      const currentLanguage = languageRef.current;
+      const currentDateFormat = dateFormatRef.current;
+
+      if (usernameDirtyRef.current && !currentUsername.trim()) {
+        return;
+      }
+
+      const body: { username?: string; language?: string; dateFormat?: string } = {};
+      if (usernameDirtyRef.current) {
+        body.username = currentUsername;
+      }
+      if (languageDirtyRef.current) {
+        body.language = currentLanguage;
+      }
+      if (dateFormatDirtyRef.current) {
+        body.dateFormat = currentDateFormat;
+      }
+
+      if (Object.keys(body).length === 0) {
+        return;
+      }
+
+      try {
+        const csrfFetch = apiFetch;
+        const response = await csrfFetch('/v1/panel/auth/profile', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setLastSaved(new Date());
+          usernameDirtyRef.current = false;
+          languageDirtyRef.current = false;
+          dateFormatDirtyRef.current = false;
+
+          if (user && data.username) {
+            user.username = data.username;
+          }
+          
+          // Don't show a toast on every auto-save to avoid spam
+        } else {
+          const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+          console.error('Profile auto-save failed:', response.status, errorData);
+          
+          // Show specific error toast based on status code
+          if (response.status === 403) {
+            toast({
+              title: t('toast.permissionDenied'),
+              description: errorData.error || errorData.message || 'You do not have permission to modify your profile.',
+              variant: "destructive",
+            });
+          } else {
+            toast({
+              title: t('toast.saveFailed'),
+              description: `Failed to save profile: ${errorData.error || errorData.message || 'Unknown error'}`,
+              variant: "destructive",
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Profile auto-save error:', error);
+        
+        // Show error toast
+        toast({
+          title: t('toast.saveFailed'),
+          description: "Failed to save profile. Please try again.",          variant: "destructive",
+        });
+      }
+    }, 500); // Reduced to 500ms for faster response
+  }, []); // Empty dependencies since we use refs to get current values
+
+  // Add a new punishment type
+  const addPunishmentType = async () => {
+    if (newPunishmentName.trim()) {
+      // Default durations and points based on category
+      const defaultUnit = 'minutes' as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
+
+      // Helper function to create duration objects
+      const createDuration = (value: number) => ({ value, unit: defaultUnit, type: 'mute' as const });
+
+      const defaultGameplayDurations = {
+        low: {
+          first: createDuration(24),
+          medium: createDuration(72),
+          habitual: createDuration(168)
+        },
+        regular: {
+          first: createDuration(72),
+          medium: createDuration(168),
+          habitual: createDuration(336)
+        },
+        severe: {
+          first: createDuration(168),
+          medium: createDuration(336),
+          habitual: createDuration(720)
+        }
+      };
+
+      const defaultSocialDurations = {
+        low: {
+          first: createDuration(24),
+          medium: createDuration(48),
+          habitual: createDuration(96)
+        },
+        regular: {
+          first: createDuration(48),
+          medium: createDuration(96),
+          habitual: createDuration(168)
+        },
+        severe: {
+          first: createDuration(72),
+          medium: createDuration(168),
+          habitual: createDuration(336)
+        }
+      };
+
+      const defaultGameplayPoints = {
+        low: 2,
+        regular: 4,
+        severe: 6
+      };
+      const defaultSocialPoints = {
+        low: 1,
+        regular: 3,
+        severe: 5
+      };
+
+      const newPunishment = {
+        name: newPunishmentName.trim(),
+        category: newPunishmentCategory,
+        customizable: true,
+        durations: newPunishmentCategory === 'Gameplay' ? defaultGameplayDurations : defaultSocialDurations,
+        points: newPunishmentCategory === 'Gameplay' ? defaultGameplayPoints : defaultSocialPoints
+      };
+
+      try {
+        const csrfFetch = apiFetch;
+        const response = await csrfFetch('/v1/panel/settings/punishment-types', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newPunishment),
+        });
+
+        if (response.ok) {
+          const createdType = await response.json();
+          setPunishmentTypes(prevTypes => [...prevTypes, createdType]);
+          setNewPunishmentName('');
+          queryClient.invalidateQueries({ queryKey: ['/v1/panel/settings/punishment-types'] });
+        } else {
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          toast({
+            title: t('toast.error'),
+            description: errorData.error || 'Failed to create punishment type',
+            variant: "destructive"
+          });
+        }
+      } catch (error) {
+        console.error('Failed to create punishment type:', error);
+        toast({
+          title: t('toast.error'),
+          description: 'Failed to create punishment type',
+          variant: "destructive"
+        });
+      }
+    }
+  };
+
+  // Remove a punishment type
+  const removePunishmentType = async (id: number) => {
+    const typeToRemove = punishmentTypes.find(pt => pt.id === id);
+    if (!typeToRemove || typeToRemove.ordinal < 6) {
+      return;
+    }
+
+    try {
+      const csrfFetch = apiFetch;
+      const response = await csrfFetch(`/v1/panel/settings/punishment-types/${typeToRemove.ordinal}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setPunishmentTypes(prevTypes => prevTypes.filter(pt => pt.id !== id));
+        queryClient.invalidateQueries({ queryKey: ['/v1/panel/settings/punishment-types'] });
+      } else {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        toast({
+          title: t('toast.error'),
+          description: errorData.error || 'Failed to delete punishment type',
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      console.error("Error deleting punishment type:", error);
+      toast({
+        title: t('toast.error'),
+        description: "Failed to delete punishment type",
+        variant: "destructive"
+      });
+    }
+  };
+
+  // Appeal form helper functions
+  const addAppealFormField = () => {
+    if (!selectedPunishment || !newAppealFieldLabel.trim()) return;
+
+    const currentFields = selectedPunishment.appealForm?.fields || [];
+    const newField: AppealFormField = {
+      id: selectedAppealField?.id || `field_${Date.now()}`,
+      type: newAppealFieldType,
+      label: newAppealFieldLabel.trim(),
+      description: newAppealFieldDescription.trim() || undefined,
+      required: newAppealFieldRequired,
+      options: (newAppealFieldType === 'dropdown' || newAppealFieldType === 'multiple_choice') ? newAppealFieldOptions : undefined,
+      order: currentFields.length,
+      sectionId: newAppealFieldSectionId || undefined,
+      optionSectionMapping: Object.keys(newAppealFieldOptionSectionMapping).length > 0 ? 
+        Object.fromEntries(Object.entries(newAppealFieldOptionSectionMapping).filter(([, value]) => value !== '')) : 
+        undefined,
+    };
+
+    let updatedFields;
+    if (selectedAppealField) {
+      // Update existing field
+      updatedFields = currentFields.map(field => 
+        field.id === selectedAppealField.id ? newField : field
+      );
+    } else {
+      // Add new field
+      updatedFields = [...currentFields, newField];
+    }
+
+    const updatedAppealForm: AppealFormSettings = {
+      fields: updatedFields,
+      sections: selectedPunishment.appealForm?.sections || []
+    };
+
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: updatedAppealForm
+    } : null);
+
+    // Reset form
+    setNewAppealFieldLabel('');
+    setNewAppealFieldType('text');
+    setNewAppealFieldDescription('');
+    setNewAppealFieldRequired(false);
+    setNewAppealFieldOptions([]);
+    setNewAppealFieldSectionId('');
+    setNewAppealFieldOptionSectionMapping({});
+    setSelectedAppealField(null);
+    setIsAddAppealFieldDialogOpen(false);
+  };
+
+  const removeAppealFormField = useCallback((fieldId: string) => {
+    if (!selectedPunishment?.appealForm?.fields) return;
+
+    const updatedFields = selectedPunishment.appealForm.fields
+      .filter(f => f.id !== fieldId)
+      .map((field, index) => ({ ...field, order: index }));
+
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: {
+        ...prev.appealForm,
+        fields: updatedFields,
+        sections: prev.appealForm?.sections ?? []
+      }
+    } : null);
+  }, [selectedPunishment, setSelectedPunishment]);
+
+  const addAppealFormSection = () => {
+    if (!selectedPunishment || !newAppealSectionTitle.trim()) return;
+
+    const currentSections = selectedPunishment.appealForm?.sections || [];
+    const newSection: AppealFormSection = {
+      id: selectedAppealSection?.id || `section_${Date.now()}`,
+      title: newAppealSectionTitle.trim(),
+      description: newAppealSectionDescription.trim() || undefined,
+      order: currentSections.length,
+      hideByDefault: newAppealSectionHideByDefault,
+    };
+
+    let updatedSections;
+    if (selectedAppealSection) {
+      // Update existing section
+      updatedSections = currentSections.map(section => 
+        section.id === selectedAppealSection.id ? newSection : section
+      );
+    } else {
+      // Add new section
+      updatedSections = [...currentSections, newSection];
+    }
+
+    const updatedAppealForm: AppealFormSettings = {
+      fields: selectedPunishment.appealForm?.fields || [],
+      sections: updatedSections
+    };
+
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: updatedAppealForm
+    } : null);
+
+    // Reset form
+    setNewAppealSectionTitle('');
+    setNewAppealSectionDescription('');
+    setNewAppealSectionHideByDefault(false);
+    setSelectedAppealSection(null);
+    setIsAddAppealSectionDialogOpen(false);
+  };
+
+  const removeAppealFormSection = useCallback((sectionId: string) => {
+    if (!selectedPunishment?.appealForm) return;
+
+    const updatedSections = (selectedPunishment.appealForm.sections || [])
+      .filter(s => s.id !== sectionId)
+      .map((section, index) => ({ ...section, order: index }));
+    
+    // Also remove fields that belong to this section
+    const updatedFields = (selectedPunishment.appealForm.fields || [])
+      .filter(f => f.sectionId !== sectionId);
+
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: {
+        fields: updatedFields,
+        sections: updatedSections
+      }
+    } : null);
+  }, [selectedPunishment, setSelectedPunishment]);
+
+  // Ticket Form Management Functions
+  const addTicketFormField = () => {
+    if (!newTicketFormFieldLabel.trim()) return;
+    
+    const newField: TicketFormField = {
+      id: Date.now().toString(),
+      type: newTicketFormFieldType,
+      label: newTicketFormFieldLabel,
+      description: newTicketFormFieldDescription || undefined,
+      required: newTicketFormFieldRequired,
+      options: (newTicketFormFieldType === 'dropdown' || newTicketFormFieldType === 'multiple_choice') ? newTicketFormFieldOptions : undefined,
+      order: ticketForms[selectedTicketFormType]?.fields?.length || 0,
+      sectionId: newTicketFormFieldSectionId || undefined,
+      optionSectionMapping: Object.keys(newTicketFormFieldOptionSectionMapping).length > 0 ? 
+        Object.fromEntries(Object.entries(newTicketFormFieldOptionSectionMapping).filter(([, value]) => value !== '')) : 
+        undefined,
+    };
+
+    if (selectedTicketFormField) {
+      // Update existing field
+      setTicketFormsState(prev => ({
+        ...prev,
+        [selectedTicketFormType]: {
+          ...prev[selectedTicketFormType],
+          fields: (prev[selectedTicketFormType]?.fields || []).map(field =>
+            field.id === selectedTicketFormField.id ? { ...newField, id: selectedTicketFormField.id } : field
+          )
+        }
+      }));
+    } else {
+      // Add new field
+      setTicketFormsState(prev => ({
+        ...prev,
+        [selectedTicketFormType]: {
+          ...prev[selectedTicketFormType],
+          fields: [...(prev[selectedTicketFormType]?.fields || []), newField]
+        }
+      }));
+    }
+
+    // Reset form
+    setNewTicketFormFieldLabel('');
+    setNewTicketFormFieldType('text');
+    setNewTicketFormFieldDescription('');
+    setNewTicketFormFieldRequired(false);
+    setNewTicketFormFieldOptions([]);
+    setNewTicketFormFieldSectionId('');
+    setNewTicketFormFieldGoToSection('');
+    setNewTicketFormFieldOptionSectionMapping({});
+    setIsOptionNavigationExpanded(false);
+    setSelectedTicketFormField(null);
+    setIsAddTicketFormFieldDialogOpen(false);
+  };
+
+  const addNewTicketFormFieldOption = () => {
+    if (newTicketFormOption.trim()) {
+      setNewTicketFormFieldOptions(prev => [...prev, newTicketFormOption.trim()]);
+      setNewTicketFormOption('');
+    }
+  };
+
+  const removeTicketFormFieldOption = (index: number) => {
+    setNewTicketFormFieldOptions(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Section Management Functions
+  const addTicketFormSection = () => {
+    if (!newTicketFormSectionTitle.trim()) return;
+    
+    const newSection: TicketFormSection = {
+      id: Date.now().toString(),
+      title: newTicketFormSectionTitle,
+      description: newTicketFormSectionDescription || undefined,
+      order: ticketForms[selectedTicketFormType]?.sections?.length || 0,
+    };
+
+    if (selectedTicketFormSection) {
+      // Update existing section
+      setTicketFormsState(prev => ({
+        ...prev,
+        [selectedTicketFormType]: {
+          ...prev[selectedTicketFormType],
+          sections: (prev[selectedTicketFormType]?.sections || []).map(section =>
+            section.id === selectedTicketFormSection.id ? { ...newSection, id: selectedTicketFormSection.id } : section
+          )
+        }
+      }));
+    } else {
+      // Add new section
+      setTicketFormsState(prev => ({
+        ...prev,
+        [selectedTicketFormType]: {
+          ...prev[selectedTicketFormType],
+          sections: [...(prev[selectedTicketFormType]?.sections || []), newSection]
+        }
+      }));
+    }
+
+    // Reset form
+    setNewTicketFormSectionTitle('');
+    setNewTicketFormSectionDescription('');
+    setSelectedTicketFormSection(null);
+    setIsAddTicketFormSectionDialogOpen(false);
+  };
+
+  // Format the last saved time
+  const formatLastSaved = () => {
+    if (!lastSaved) return "Not saved yet";
+
+    const now = new Date();
+    const diffSeconds = Math.floor((now.getTime() - lastSaved.getTime()) / 1000);
+
+    if (diffSeconds < 60) {
+      return "Just now";
+    } else if (diffSeconds < 3600) {
+      const minutes = Math.floor(diffSeconds / 60);
+      return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+    } else {
+      return lastSaved.toLocaleTimeString();
+    }
+  };
+
+  // Function to move fields between sections
+  const moveFieldBetweenSections = useCallback((fieldId: string, _fromSectionId: string, toSectionId: string, targetIndex?: number) => {
+    setTicketFormsState(prev => {
+      const allFields = [...(prev[selectedTicketFormType]?.fields || [])];
+
+      // Find the field to move
+      const fieldToMove = allFields.find(f => f.id === fieldId);
+      if (!fieldToMove) return prev;
+
+      // Get fields in the target section
+      const targetSectionFields = allFields.filter(f => f.sectionId === toSectionId);
+
+      // Calculate the new order for the moved field
+      let newOrder: number;
+      const targetField = targetIndex !== undefined ? targetSectionFields[targetIndex] : undefined;
+      if (targetField) {
+        // Insert at specific position
+        newOrder = targetField.order;
+
+        // Update orders of fields in target section that come after the insertion point
+        const updatedFields = allFields.map(field => {
+          if (field.id === fieldId) {
+            return { ...field, sectionId: toSectionId, order: newOrder };
+          } else if (field.sectionId === toSectionId && field.order >= newOrder) {
+            return { ...field, order: field.order + 1 };
+          }
+          return field;
+        });
+        
+        return {
+          ...prev,
+          [selectedTicketFormType]: {
+            ...prev[selectedTicketFormType],
+            fields: updatedFields
+          }
+        };
+      } else {
+        // Add to the end of the target section
+        newOrder = targetSectionFields.length > 0 ? Math.max(...targetSectionFields.map(f => f.order)) + 1 : 0;
+        
+        const updatedFields = allFields.map(field => {
+          if (field.id === fieldId) {
+            return { ...field, sectionId: toSectionId, order: newOrder };
+          }
+          return field;
+        });
+        
+        return {
+          ...prev,
+          [selectedTicketFormType]: {
+            ...prev[selectedTicketFormType],
+            fields: updatedFields
+          }
+        };
+      }
+    });
+  }, [selectedTicketFormType]);
+
+  // Drag and drop handlers for appeal form sections
+  const moveAppealFormSection = useCallback((dragIndex: number, hoverIndex: number) => {
+    if (!selectedPunishment?.appealForm?.sections) return;
+    
+    const sections = [...selectedPunishment.appealForm.sections];
+    const dragSection = sections[dragIndex];
+    if (!dragSection) return;
+
+    sections.splice(dragIndex, 1);
+    sections.splice(hoverIndex, 0, dragSection);
+
+    // Update order values
+    const updatedSections = sections.map((section, index) => ({
+      ...section,
+      order: index
+    }));
+    
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: {
+        ...prev.appealForm!,
+        sections: updatedSections
+      }
+    } : null);
+  }, [selectedPunishment]);
+
+  // Drag and drop handlers for appeal form fields within sections
+  const moveAppealFormField = useCallback((dragIndex: number, hoverIndex: number, sectionId: string) => {
+    if (!selectedPunishment?.appealForm?.fields) return;
+    
+    const allFields = [...selectedPunishment.appealForm.fields];
+    const sectionFields = allFields.filter(f => f.sectionId === sectionId);
+    
+    const dragField = sectionFields[dragIndex];
+    const hoverField = sectionFields[hoverIndex];
+    
+    if (!dragField || !hoverField) return;
+    
+    // Update the order values
+    const dragOrder = dragField.order;
+    const hoverOrder = hoverField.order;
+    
+    const updatedFields = allFields.map(field => {
+      if (field.id === dragField.id) {
+        return { ...field, order: hoverOrder };
+      } else if (field.id === hoverField.id) {
+        return { ...field, order: dragOrder };
+      }
+      return field;
+    });
+    
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: {
+        ...prev.appealForm!,
+        fields: updatedFields
+      }
+    } : null);
+  }, [selectedPunishment]);
+
+  // Function to move appeal form fields between sections
+  const moveAppealFormFieldBetweenSections = useCallback((fieldId: string, _fromSectionId: string, toSectionId: string, targetIndex?: number) => {
+    if (!selectedPunishment?.appealForm?.fields) return;
+    
+    const allFields = [...selectedPunishment.appealForm.fields];
+    const fieldToMove = allFields.find(f => f.id === fieldId);
+    if (!fieldToMove) return;
+    
+    const targetSectionFields = allFields.filter(f => f.sectionId === toSectionId);
+    const newOrder = targetIndex !== undefined ? targetIndex : targetSectionFields.length;
+    
+    const updatedFields = allFields.map(field => {
+      if (field.id === fieldId) {
+        return { ...field, sectionId: toSectionId, order: newOrder };
+      }
+      return field;
+    });
+    
+    setSelectedPunishment(prev => prev ? {
+      ...prev,
+      appealForm: {
+        ...prev.appealForm!,
+        fields: updatedFields
+      }
+    } : null);
+  }, [selectedPunishment]);
+
+  // Appeal form edit and delete handlers
+  const onEditAppealFormSection = useCallback((section: AppealFormSection) => {
+    setSelectedAppealSection(section);
+    setNewAppealSectionTitle(section.title);
+    setNewAppealSectionDescription(section.description || '');
+    setNewAppealSectionHideByDefault(section.hideByDefault || false);
+    setIsAddAppealSectionDialogOpen(true);
+  }, []);
+
+  const onDeleteAppealFormSection = (sectionId: string) => {
+    removeAppealFormSection(sectionId);
+  };
+
+  const onEditAppealFormField = useCallback((field: AppealFormField) => {
+    setSelectedAppealField(field);
+    setNewAppealFieldLabel(field.label);
+    setNewAppealFieldType(field.type);
+    setNewAppealFieldDescription(field.description || '');
+    setNewAppealFieldRequired(field.required);
+    setNewAppealFieldOptions(field.options || []);
+    setNewAppealFieldSectionId(field.sectionId || '');
+    setNewAppealFieldOptionSectionMapping(field.optionSectionMapping || {});
+    setIsAddAppealFieldDialogOpen(true);
+  }, []);
+
+  const onDeleteAppealFormField = (fieldId: string) => {
+    removeAppealFormField(fieldId);
+  };
+
+  const onAddAppealFormField = useCallback((sectionId: string) => {
+    setNewAppealFieldSectionId(sectionId);
+    setIsAddAppealFieldDialogOpen(true);
+  }, []);
+
+  // Settings categories configuration
+  const toSubCategories = (categoryId: string) =>
+    accessibleSubCategories(categoryId, subCategoryAccess).map((sub) => ({
+      ...sub,
+      title: t(sub.titleKey),
+    }));
+
+  const activeSubCategory = expandedCategory
+    ? accessibleSubCategories(expandedCategory, subCategoryAccess).find((sub) => sub.id === expandedSubCategory)
+    : undefined;
+  const ActiveSubCategoryIcon = activeSubCategory?.icon;
+
+  const settingsCategories = [
+    {
+      id: 'general',
+      title: t('settings.page.instanceSettings'),
+      description: t('settings.page.instanceSettingsDesc'),
+      icon: SettingsIcon,
+      permission: 'general',
+      subCategories: toSubCategories('general'),
+    },
+    {
+      id: 'punishment',
+      title: t('settings.page.punishments'),
+      description: t('settings.page.punishmentsDesc'),
+      icon: Scale,
+      permission: 'punishment',
+      subCategories: toSubCategories('punishment'),
+    },
+    {
+      id: 'tickets',
+      title: t('settings.page.tickets'),
+      description: t('settings.page.ticketsDesc'),
+      icon: FileText,
+      permission: 'tags',
+      subCategories: toSubCategories('tickets'),
+    },
+    {
+      id: 'staff',
+      title: t('settings.page.staffRoles'),
+      description: t('settings.page.staffRolesDesc'),
+      icon: Users,
+      permission: 'staff',
+      subCategories: toSubCategories('staff'),
+    },
+    {
+      id: 'knowledgebase',
+      title: t('settings.page.knowledgebaseHomepage'),
+      description: t('settings.page.knowledgebaseHomepageDesc'),
+      icon: BookOpen,
+      permission: 'knowledgebase',
+      subCategories: toSubCategories('knowledgebase'),
+    },
+  ];
+
+  return (
+    <PageContainer>
+      <div className="flex flex-col space-y-4">
+        <div className="flex justify-between items-center">
+          <h2 className="text-xl font-semibold">{t('settings.page.title')}</h2>
+          <div className="flex space-x-2 items-center">
+            {isSaving ? (
+              <span className="text-sm text-muted-foreground flex items-center">
+                <Save className="animate-spin h-4 w-4 mr-2" />
+                {t('settings.page.saving')}
+              </span>
+            ) : lastSaved ? (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger>
+                    <span className="text-sm text-muted-foreground flex items-center">
+                      <CheckCircle className="h-4 w-4 mr-2 text-green-500" />
+                      {t('settings.page.saved')} {formatLastSaved()}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{t('settings.page.autoSaved')}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Category Cards Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
+          {settingsCategories.map((category) => {
+            // Check permission
+            if (category.permission && !canAccessSettingsTab(category.permission as SettingsTab)) {
+              return null;
+            }
+            if (category.subCategories && category.subCategories.length === 0) {
+              return null;
+            }
+
+            // Only highlight if this category has a selected sub-category
+            const isSelected = expandedCategory === category.id && !!expandedSubCategory;
+            const Icon = category.icon;
+
+            return (
+              <Card
+                key={category.id}
+                className={`transition-all rounded-card shadow-card hover:shadow-card-hover ${isSelected ? 'bg-muted/50 ring-1 ring-primary/20' : ''}`}
+              >
+                <CardContent className="p-5">
+                  <div className="flex flex-col items-center text-center">
+                    <div className={`p-4 rounded-card mb-3 bg-surface-2`}>
+                      <Icon className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <h3 className="font-medium text-sm mb-1">{category.title}</h3>
+                    <p className="text-xs text-muted-foreground line-clamp-2">{category.description}</p>
+
+                    {/* Sub-categories list */}
+                    {category.subCategories && (
+                      <div className="mt-3 w-full space-y-1">
+                        {category.subCategories.map((sub) => {
+                          const SubIcon = sub.icon;
+                          const isSubSelected = isSelected && expandedSubCategory === sub.id;
+                          return (
+                            <div
+                              key={sub.id}
+                              className={`flex items-center gap-2 p-2 rounded-md text-xs transition-colors ${
+                                isSubSelected
+                                    ? 'bg-primary/10 font-medium cursor-pointer'
+                                    : 'hover:bg-muted text-muted-foreground cursor-pointer'
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSubCategorySelect(category.id, sub.id);
+                              }}
+                            >
+                              <SubIcon className="h-3 w-3 flex-shrink-0" />
+                              <span className="truncate">{sub.title}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        {/* Expanded Content Section - Below all cards */}
+        {/* Only show Card wrapper for sections that don't have their own Card */}
+        {expandedCategory !== 'staff' && expandedCategory !== 'knowledgebase' && (
+        <Card className="rounded-card shadow-card">
+          <CardContent className="p-8">
+            {/* Account Settings - Show by default when no sub-category is expanded */}
+            {!expandedSubCategory && (
+              <AccountSettings
+                profileUsername={profileUsername}
+                setProfileUsername={setProfileUsername}
+                currentEmail={currentEmail}
+                setCurrentEmail={setCurrentEmail}
+                minecraftUsername={user?.minecraftUsername}
+                userRole={user?.role}
+                language={languageState}
+                setLanguage={setLanguage}
+                dateFormat={dateFormatState}
+                setDateFormat={setDateFormat}
+              />
+            )}
+
+            {/* Instance settings */}
+            {expandedCategory === 'general' && expandedSubCategory && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium flex items-center gap-2">
+                  {ActiveSubCategoryIcon && <ActiveSubCategoryIcon className="h-5 w-5" />}
+                  {activeSubCategory && t(activeSubCategory.titleKey)}
+                </h3>
+                <GeneralSettings
+                serverDisplayName={serverDisplayName}
+                setServerDisplayName={setServerDisplayName}
+                defaultLanguage={defaultLanguage}
+                setDefaultLanguage={setDefaultLanguage}
+                homepageIconUrl={homepageIconUrl}
+                panelIconUrl={panelIconUrl}
+                uploadingHomepageIcon={uploadingHomepageIcon}
+                uploadingPanelIcon={uploadingPanelIcon}
+                handleHomepageIconUpload={handleHomepageIconUpload}
+                handlePanelIconUpload={handlePanelIconUpload}
+                handleRemoveHomepageIcon={() => setHomepageIconUrl('')}
+                handleRemovePanelIcon={() => setPanelIconUrl('')}
+                apiKey={apiKey}
+                fullApiKey={fullApiKey}
+                showApiKey={showApiKey}
+                apiKeyCopied={apiKeyCopied}
+                isGeneratingApiKey={isGeneratingApiKey}
+                isRevokingApiKey={isRevokingApiKey}
+                generateApiKey={generateApiKey}
+                revokeApiKey={revokeApiKey}
+                revealApiKey={revealApiKey}
+                copyApiKey={copyApiKey}
+                maskApiKey={maskApiKey}
+                webhookSettings={settingsData?.settings && 'webhookSettings' in settingsData.settings ? (settingsData.settings.webhookSettings ?? undefined) as unknown as WebhookSettingsData | undefined : undefined}
+                handleWebhookSave={handleWebhookSave}
+                savingWebhookSettings={savingWebhookSettings}
+                visibleSection={expandedSubCategory}
+              />
+              </div>
+            )}
+
+            {/* Punishment Settings */}
+            {expandedCategory === 'punishment' && expandedSubCategory && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium flex items-center gap-2">
+                  {expandedSubCategory === 'thresholds' && <><Layers className="h-5 w-5" />{t('settings.page.thresholds')}</>}
+                  {expandedSubCategory === 'types' && <><Layers className="h-5 w-5" />{t('settings.page.punishmentTypes')}</>}
+                </h3>
+                <PunishmentSettings
+                statusThresholds={statusThresholds}
+                setStatusThresholds={setStatusThresholds}
+                punishmentTypes={punishmentTypes}
+                newPunishmentName={newPunishmentName}
+                setNewPunishmentName={setNewPunishmentName}
+                newPunishmentCategory={newPunishmentCategory}
+                setNewPunishmentCategory={setNewPunishmentCategory}
+                addPunishmentType={addPunishmentType}
+                removePunishmentType={removePunishmentType}
+                setSelectedPunishment={(punishment: { id: number }) => {
+                  const match = punishmentTypesState.find(pt => pt.id === punishment.id);
+                  if (match) setSelectedPunishment(match);
+                }}
+                visibleSection={expandedSubCategory}
+              />
+              </div>
+            )}
+
+            {/* Tickets Settings - Show selected sub-categories */}
+            {expandedCategory === 'tickets' && expandedSubCategory && (
+              <div className="space-y-6">
+                <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+                  {ActiveSubCategoryIcon && <ActiveSubCategoryIcon className="h-5 w-5" />}
+                  {activeSubCategory && t(activeSubCategory.titleKey)}
+                </h3>
+                {expandedSubCategory === 'ai-moderation' ? (
+                  <TicketAiModerationSettings
+                    aiModerationSettings={aiModerationSettings}
+                    setAiModerationSettings={setAiModerationSettings}
+                    punishmentTypes={ticketSettingsPunishmentTypes}
+                  />
+                ) : isTicketSettingsSection(expandedSubCategory) ? (
+                  <TicketSettings
+                    quickResponsesState={quickResponsesState}
+                    setQuickResponsesState={setQuickResponsesState}
+                    labels={labels}
+                    setLabels={setLabelsState}
+                    bugReportTags={bugReportTags}
+                    setBugReportTags={setBugReportTagsState}
+                    playerReportTags={playerReportTags}
+                    setPlayerReportTags={setPlayerReportTagsState}
+                    appealTags={appealTags}
+                    setAppealTags={setAppealTagsState}
+                    newBugTag={newBugTag}
+                    setNewBugTag={setNewBugTag}
+                    newPlayerTag={newPlayerTag}
+                    setNewPlayerTag={setNewPlayerTag}
+                    newAppealTag={newAppealTag}
+                    setNewAppealTag={setNewAppealTag}
+                    ticketForms={ticketForms}
+                    setTicketForms={setTicketFormsState}
+                    selectedTicketFormType={selectedTicketFormType}
+                    setSelectedTicketFormType={setSelectedTicketFormType}
+                    punishmentTypesState={ticketSettingsPunishmentTypes}
+                    moveFieldBetweenSections={moveFieldBetweenSections}
+                    visibleSection={expandedSubCategory}
+                  />
+                ) : null}
+              </div>
+            )}
+
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Staff & Roles Settings - These have their own Card wrappers */}
+        {expandedCategory === 'staff' && expandedSubCategory && (
+          <>
+            {expandedSubCategory === 'staff-management' && <StaffManagementPanel />}
+            {expandedSubCategory === 'roles-permissions' && <StaffRolesCard />}
+          </>
+        )}
+
+        {/* Knowledgebase & Homepage Settings - These have their own Card wrappers */}
+        {expandedCategory === 'knowledgebase' && expandedSubCategory && (
+          <>
+            {expandedSubCategory === 'knowledgebase-articles' && <KnowledgebaseSettings />}
+            {expandedSubCategory === 'homepage-cards' && <HomepageCardSettings />}
+          </>
+        )}
+
+        {/* Punishment Configuration Dialog */}
+        {selectedPunishment && (
+          <Dialog open={Boolean(selectedPunishment)} onOpenChange={() => setSelectedPunishmentState(null)}>
+            <DialogContent className="max-w-4xl p-6 max-h-[90vh] overflow-hidden">
+              <DialogHeader>
+                <DialogTitle className="text-lg font-semibold">
+                  {t('settings.page.configurePunishmentType')}
+                </DialogTitle>
+                <DialogDescription className="text-sm text-muted-foreground">
+                  {t('settings.page.configurePunishmentTypeDesc', { name: selectedPunishment.name })}
+                </DialogDescription>
+              </DialogHeader>
+
+              <Tabs defaultValue="configuration" className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="configuration">{t('settings.page.configuration')}</TabsTrigger>
+                  <TabsTrigger value="appeal-form">{t('settings.page.appealForm')}</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="configuration" className="space-y-4 max-h-[60vh] overflow-y-auto">
+                  {/* Show different fields based on whether it's a core administrative punishment */}
+                  {selectedPunishment.isCustomizable ? (
+                    <>
+                      {/* Punishment Name and Category - Only for customizable punishments */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="edit-punishment-name">{t('settings.page.punishmentName')}</Label>
+                          <Input
+                            id="edit-punishment-name"
+                            value={selectedPunishment.name}
+                            onChange={(e) => setSelectedPunishment(prev => prev ? { ...prev, name: e.target.value } : null)}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="edit-punishment-category">{t('settings.page.category')}</Label>
+                          <Select
+                            value={selectedPunishment.category}
+                            onValueChange={(value) => setSelectedPunishment(prev => prev ? { ...prev, category: value as 'Gameplay' | 'Social' } : null)}
+                          >
+                            <SelectTrigger id="edit-punishment-category">
+                              <SelectValue placeholder={t('settings.page.selectCategory')} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Gameplay">Gameplay</SelectItem>
+                              <SelectItem value="Social">Social</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Core Administrative Punishment - Show read-only info */}
+                      <div className="bg-muted/30 p-4 rounded-lg">
+                        <h5 className="text-sm font-medium mb-2">{t('settings.page.coreAdminPunishment')}</h5>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          {t('settings.page.coreAdminPunishmentDesc')}
+                        </p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">{t('settings.page.name')}</Label>
+                            <div className="text-sm font-medium">{selectedPunishment.name}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">{t('settings.page.category')}</Label>
+                            <div className="text-sm font-medium">{selectedPunishment.category}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Staff and Player Descriptions - Available for all punishment types */}
+                  <div className="space-y-4">
+                    <h5 className="text-sm font-medium">{t('settings.page.descriptions')}</h5>
+                    <div className="grid grid-cols-1 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="staff-description">{t('settings.page.staffDescription')}</Label>
+                        <textarea
+                          id="staff-description"
+                          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-[80px]"
+                          placeholder={t('settings.page.staffDescriptionPlaceholder')}
+                          value={selectedPunishment.staffDescription || ''}
+                          onChange={(e) => setSelectedPunishment(prev => prev ? { ...prev, staffDescription: e.target.value } : null)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {t('settings.page.staffDescriptionHelp')}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="player-description">{t('settings.page.playerDescription')}</Label>
+                        <textarea
+                          id="player-description"
+                          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-[80px]"
+                          placeholder={t('settings.page.playerDescriptionPlaceholder')}
+                          value={selectedPunishment.playerDescription || ''}
+                          onChange={(e) => setSelectedPunishment(prev => prev ? { ...prev, playerDescription: e.target.value } : null)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {t('settings.page.playerDescriptionHelp')}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Restrictions, Durations, and Points - Only for customizable punishments */}
+                  {selectedPunishment.isCustomizable && (
+                    <>
+                      {/* Permanent Punishment Options */}
+                      {/* New Punishment Options */}
+                      <div className="space-y-3 p-3 border rounded-md">
+                        <h5 className="text-sm font-medium">{t('settings.page.punishmentOptions')}</h5>
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="canBeAltBlocking"
+                              checked={selectedPunishment.canBeAltBlocking || false}
+                              disabled={selectedPunishment.permanentUntilUsernameChange || selectedPunishment.permanentUntilSkinChange}
+                              onChange={(e) => {
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  canBeAltBlocking: e.target.checked
+                                } : null);
+                              }}
+                              className="rounded"
+                            />
+                            <Label htmlFor="canBeAltBlocking" className="text-sm">
+                              {t('settings.page.canBeAltBlocking')}
+                            </Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="canBeStatWiping"
+                              checked={selectedPunishment.canBeStatWiping || false}
+                              disabled={selectedPunishment.permanentUntilUsernameChange || selectedPunishment.permanentUntilSkinChange}
+                              onChange={(e) => {
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  canBeStatWiping: e.target.checked
+                                } : null);
+                              }}
+                              className="rounded"
+                            />
+                            <Label htmlFor="canBeStatWiping" className="text-sm">
+                              {t('settings.page.canBeStatWiping')}
+                            </Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="singleSeverityPunishment"
+                              checked={selectedPunishment.singleSeverityPunishment || false}
+                              disabled={selectedPunishment.permanentUntilUsernameChange || selectedPunishment.permanentUntilSkinChange}
+                              onChange={(e) => {
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  singleSeverityPunishment: e.target.checked,
+                                  // Initialize single severity settings if checked
+                                  singleSeverityDurations: e.target.checked && !prev.singleSeverityDurations ? {
+                                    first: { value: 24, unit: 'hours', type: 'mute' },
+                                    medium: { value: 3, unit: 'days', type: 'mute' },
+                                    habitual: { value: 7, unit: 'days', type: 'mute' }
+                                  } : prev.singleSeverityDurations,
+                                  singleSeverityPoints: e.target.checked && !prev.singleSeverityPoints ? 3 : prev.singleSeverityPoints
+                                } : null);
+                              }}
+                              className="rounded"
+                            />
+                            <Label htmlFor="singleSeverityPunishment" className="text-sm">
+                              {t('settings.page.singleSeverityPunishment')}
+                            </Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="permanentUntilUsernameChange"
+                              checked={selectedPunishment.permanentUntilUsernameChange || false}
+                              onChange={(e) => {
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  permanentUntilUsernameChange: e.target.checked,
+                                  // Clear single severity if permanent is checked
+                                  singleSeverityPunishment: e.target.checked ? false : prev.singleSeverityPunishment,
+                                  // Clear skin change if username change is checked
+                                  permanentUntilSkinChange: e.target.checked ? false : prev.permanentUntilSkinChange,
+                                  // Clear alt-blocking and stat-wiping if permanent is checked
+                                  canBeAltBlocking: e.target.checked ? false : prev.canBeAltBlocking,
+                                  canBeStatWiping: e.target.checked ? false : prev.canBeStatWiping
+                                } : null);
+                              }}
+                              className="rounded"
+                            />
+                            <Label htmlFor="permanentUntilUsernameChange" className="text-sm">
+                              {t('settings.page.permanentUntilUsernameChange')}
+                            </Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="permanentUntilSkinChange"
+                              checked={selectedPunishment.permanentUntilSkinChange || false}
+                              onChange={(e) => {
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  permanentUntilSkinChange: e.target.checked,
+                                  // Clear single severity if permanent is checked
+                                  singleSeverityPunishment: e.target.checked ? false : prev.singleSeverityPunishment,
+                                  // Clear username change if skin change is checked
+                                  permanentUntilUsernameChange: e.target.checked ? false : prev.permanentUntilUsernameChange,
+                                  // Clear alt-blocking and stat-wiping if permanent is checked
+                                  canBeAltBlocking: e.target.checked ? false : prev.canBeAltBlocking,
+                                  canBeStatWiping: e.target.checked ? false : prev.canBeStatWiping
+                                } : null);
+                              }}
+                              className="rounded"
+                            />
+                            <Label htmlFor="permanentUntilSkinChange" className="text-sm">
+                              {t('settings.page.permanentUntilSkinChange')}
+                            </Label>
+                          </div>
+                          {selectedPunishment.singleSeverityPunishment && (
+                            <div className="ml-6 space-y-3 p-3 border rounded-md bg-muted/20">
+                              <div>
+                                <Label className="text-xs text-muted-foreground mb-2 block">{t('settings.page.singleSeverityDurations')}</Label>
+                                <div className="space-y-3">
+                                  {['first', 'medium', 'habitual'].map((offenseType) => (
+                                    <div key={`single-${offenseType}`}>
+                                      <Label className="text-xs text-muted-foreground">
+                                        {offenseType.charAt(0).toUpperCase() + offenseType.slice(1)} Offense
+                                      </Label>
+                                      <div className="flex gap-1 mt-1">
+                                        <Input
+                                          type="number"
+                                          min="0"
+                                          value={selectedPunishment.singleSeverityDurations?.[offenseType as keyof typeof selectedPunishment.singleSeverityDurations]?.value || ''}
+                                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                            const value = Number(e.target.value);
+                                            setSelectedPunishment(prev => prev ? {
+                                              ...prev,
+                                              singleSeverityDurations: {
+                                                first: { value: 24, unit: 'hours', type: 'mute' },
+                                                medium: { value: 3, unit: 'days', type: 'mute' },
+                                                habitual: { value: 7, unit: 'days', type: 'mute' },
+                                                ...prev.singleSeverityDurations,
+                                                [offenseType]: {
+                                                  ...(prev.singleSeverityDurations?.[offenseType as keyof typeof prev.singleSeverityDurations] || { value: 24, unit: 'hours', type: 'mute' }),
+                                                  value
+                                                }
+                                              }
+                                            } : null);
+                                          }}
+                                          className="text-center text-xs h-8 w-16"
+                                          placeholder="24"
+                                        />
+                                        <Select
+                                          value={selectedPunishment.singleSeverityDurations?.[offenseType as keyof typeof selectedPunishment.singleSeverityDurations]?.unit || 'hours'}
+                                          onValueChange={(unit: string) => {
+                                            setSelectedPunishment(prev => prev ? {
+                                              ...prev,
+                                              singleSeverityDurations: {
+                                                first: { value: 24, unit: 'hours', type: 'mute' },
+                                                medium: { value: 3, unit: 'days', type: 'mute' },
+                                                habitual: { value: 7, unit: 'days', type: 'mute' },
+                                                ...prev.singleSeverityDurations,
+                                                [offenseType]: {
+                                                  ...(prev.singleSeverityDurations?.[offenseType as keyof typeof prev.singleSeverityDurations] || { value: 24, unit: 'hours', type: 'mute' }),
+                                                  unit: unit as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'
+                                                }
+                                              }
+                                            } : null);
+                                          }}
+                                        >
+                                          <SelectTrigger className="w-[60px] h-8 text-xs">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="seconds">S</SelectItem>
+                                            <SelectItem value="minutes">Min</SelectItem>
+                                            <SelectItem value="hours">H</SelectItem>
+                                            <SelectItem value="days">D</SelectItem>
+                                            <SelectItem value="weeks">W</SelectItem>
+                                            <SelectItem value="months">M</SelectItem>
+                                          </SelectContent>
+                                        </Select>                                        <Select
+                                          value={selectedPunishment.singleSeverityDurations?.[offenseType as keyof typeof selectedPunishment.singleSeverityDurations]?.type || 'mute'}
+                                          onValueChange={(type: string) => {
+                                            setSelectedPunishment(prev => prev ? {
+                                              ...prev,
+                                              singleSeverityDurations: {
+                                                first: { value: 24, unit: 'hours', type: 'mute' },
+                                                medium: { value: 3, unit: 'days', type: 'mute' },
+                                                habitual: { value: 7, unit: 'days', type: 'mute' },
+                                                ...prev.singleSeverityDurations,
+                                                [offenseType]: {
+                                                  ...(prev.singleSeverityDurations?.[offenseType as keyof typeof prev.singleSeverityDurations] || { value: 24, unit: 'hours', type: 'mute' }),
+                                                  type: type as 'mute' | 'ban' | 'permanent mute' | 'permanent ban'
+                                                }
+                                              }
+                                            } : null);
+                                          }}
+                                        >
+                                          <SelectTrigger className="w-[70px] h-8 text-xs">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="mute">Mute</SelectItem>
+                                            <SelectItem value="ban">Ban</SelectItem>
+                                            <SelectItem value="permanent mute">Permanent Mute</SelectItem>                                            <SelectItem value="permanent ban">Permanent Ban</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <Label className="text-xs text-muted-foreground">{t('settings.page.singleSeverityPoints')}</Label>
+                                <Input
+                                  type="number"
+                                  placeholder="Points"
+                                  value={selectedPunishment.singleSeverityPoints || ''}
+                                  onChange={(e) => {
+                                    const value = Number(e.target.value);
+                                    setSelectedPunishment(prev => prev ? {
+                                      ...prev,
+                                      singleSeverityPoints: value
+                                    } : null);
+                                  }}
+                                  className="text-center w-full mt-1"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Only show Durations and Points if not single severity and not permanent until change */}
+                      {!selectedPunishment.singleSeverityPunishment && !selectedPunishment.permanentUntilUsernameChange && !selectedPunishment.permanentUntilSkinChange && (
+                    <div className="space-y-4">
+                      {/* Durations Configuration */}
+                      <div>
+                        <h4 className="text-base font-medium mb-2">{t('settings.page.durations')}</h4>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          {t('settings.page.durationsDesc')}
+                        </p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Low Severity */}
+                          <div className="space-y-2">
+                            <Label className="font-medium">{t('settings.page.lowSeverityDurations')}</Label>
+                            <div className="space-y-3 p-2 border rounded-md">
+                              {['first', 'medium', 'habitual'].map((offenseType) => (
+                                <div key={`low-${offenseType}`}>
+                                  <Label htmlFor={`low-${offenseType}-${selectedPunishment.id}`} className="text-xs text-muted-foreground">
+                                    {offenseType.charAt(0).toUpperCase() + offenseType.slice(1)} Offense
+                                  </Label>
+                                  
+                                  <div className="flex gap-1 mt-1">                                    <Input
+                                      type="number"
+                                      min="0"
+                                      value={selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.value || ''}
+                                      onChange={(e) => {
+                                        const value = Number(e.target.value);
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            low: {
+                                              ...prev.durations.low,
+                                              [offenseType]: {
+                                                ...prev.durations.low[offenseType as keyof typeof prev.durations.low],
+                                                value
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                      disabled={selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.type?.includes('permanent')}
+                                      className={`text-center text-xs h-8 w-16 ${selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.type?.includes('permanent') ? 'opacity-50' : ''}`}
+                                      placeholder="24"
+                                    />                                    <Select
+                                      value={selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.unit || 'hours'}
+                                      onValueChange={(unit) => {
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            low: {
+                                              ...prev.durations.low,
+                                              [offenseType]: {
+                                                ...prev.durations.low[offenseType as keyof typeof prev.durations.low],
+                                                unit: unit as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                      disabled={selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.type?.includes('permanent')}
+                                    >
+                                      <SelectTrigger className={`w-[60px] h-8 text-xs ${selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.type?.includes('permanent') ? 'opacity-50' : ''}`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="seconds">S</SelectItem>
+                                        <SelectItem value="minutes">Min</SelectItem>
+                                        <SelectItem value="hours">H</SelectItem>
+                                        <SelectItem value="days">D</SelectItem>
+                                        <SelectItem value="weeks">W</SelectItem>
+                                        <SelectItem value="months">M</SelectItem>
+                                      </SelectContent>
+                                    </Select>                                    <Select
+                                      value={selectedPunishment.durations?.low[offenseType as keyof typeof selectedPunishment.durations.low]?.type || 'mute'}
+                                      onValueChange={(type) => {
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            low: {
+                                              ...prev.durations.low,
+                                              [offenseType]: {
+                                                ...prev.durations.low[offenseType as keyof typeof prev.durations.low],
+                                                type: type as 'mute' | 'ban' | 'permanent mute' | 'permanent ban'
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                    >
+                                      <SelectTrigger className="w-[70px] h-8 text-xs">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="mute">Mute</SelectItem>
+                                        <SelectItem value="ban">Ban</SelectItem>
+                                        <SelectItem value="permanent mute">Permanent Mute</SelectItem>
+                                        <SelectItem value="permanent ban">Permanent Ban</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Regular Severity */}
+                          <div className="space-y-2">
+                            <Label className="font-medium">{t('settings.page.regularSeverityDurations')}</Label>
+                            <div className="space-y-3 p-2 border rounded-md">
+                              {['first', 'medium', 'habitual'].map((offenseType) => (
+                                <div key={`regular-${offenseType}`}>
+                                  <Label htmlFor={`regular-${offenseType}-${selectedPunishment.id}`} className="text-xs text-muted-foreground">
+                                    {offenseType.charAt(0).toUpperCase() + offenseType.slice(1)} Offense
+                                  </Label>
+                                  
+                                  <div className="flex gap-1 mt-1">
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      value={selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.value || ''}
+                                      onChange={(e) => {
+                                        const value = Number(e.target.value);
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            regular: {
+                                              ...prev.durations.regular,
+                                              [offenseType]: {
+                                                ...prev.durations.regular[offenseType as keyof typeof prev.durations.regular],
+                                                value
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                      disabled={selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.type?.includes('permanent')}
+                                      className={`text-center text-xs h-8 w-16 ${selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.type?.includes('permanent') ? 'opacity-50' : ''}`}
+                                      placeholder="48"
+                                    />
+                                    <Select
+                                      value={selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.unit || 'hours'}
+                                      onValueChange={(unit) => {
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            regular: {
+                                              ...prev.durations.regular,
+                                              [offenseType]: {
+                                                ...prev.durations.regular[offenseType as keyof typeof prev.durations.regular],
+                                                unit: unit as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                      disabled={selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.type?.includes('permanent')}
+                                    >
+                                      <SelectTrigger className={`w-[60px] h-8 text-xs ${selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.type?.includes('permanent') ? 'opacity-50' : ''}`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="seconds">S</SelectItem>
+                                        <SelectItem value="minutes">Min</SelectItem>
+                                        <SelectItem value="hours">H</SelectItem>
+                                        <SelectItem value="days">D</SelectItem>
+                                        <SelectItem value="weeks">W</SelectItem>
+                                        <SelectItem value="months">M</SelectItem>
+                                      </SelectContent>
+                                    </Select>                                    <Select
+                                      value={selectedPunishment.durations?.regular[offenseType as keyof typeof selectedPunishment.durations.regular]?.type || 'mute'}
+                                      onValueChange={(type) => {
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            regular: {
+                                              ...prev.durations.regular,
+                                              [offenseType]: {
+                                                ...prev.durations.regular[offenseType as keyof typeof prev.durations.regular],
+                                                type: type as 'mute' | 'ban' | 'permanent mute' | 'permanent ban'
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                    >
+                                      <SelectTrigger className="w-[70px] h-8 text-xs">
+                                        <SelectValue />                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="mute">Mute</SelectItem>
+                                        <SelectItem value="ban">Ban</SelectItem>
+                                        <SelectItem value="permanent mute">Permanent Mute</SelectItem>
+                                        <SelectItem value="permanent ban">Permanent Ban</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Severe Severity */}
+                          <div className="space-y-2">
+                            <Label className="font-medium">{t('settings.page.severeSeverityDurations')}</Label>
+                            <div className="space-y-3 p-2 border rounded-md">
+                              {['first', 'medium', 'habitual'].map((offenseType) => (
+                                <div key={`severe-${offenseType}`}>
+                                  <Label htmlFor={`severe-${offenseType}-${selectedPunishment.id}`} className="text-xs text-muted-foreground">
+                                    {offenseType.charAt(0).toUpperCase() + offenseType.slice(1)} Offense
+                                  </Label>
+                                  
+                                  <div className="flex gap-1 mt-1">
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      value={selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.value || ''}
+                                      onChange={(e) => {
+                                        const value = Number(e.target.value);
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            severe: {
+                                              ...prev.durations.severe,
+                                              [offenseType]: {
+                                                ...prev.durations.severe[offenseType as keyof typeof prev.durations.severe],
+                                                value
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                      disabled={selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.type?.includes('permanent')}
+                                      className={`text-center text-xs h-8 w-16 ${selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.type?.includes('permanent') ? 'opacity-50' : ''}`}
+                                      placeholder="72"
+                                    />
+                                    <Select
+                                      value={selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.unit || 'hours'}
+                                      onValueChange={(unit) => {
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            severe: {
+                                              ...prev.durations.severe,
+                                              [offenseType]: {
+                                                ...prev.durations.severe[offenseType as keyof typeof prev.durations.severe],
+                                                unit: unit as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                      disabled={selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.type?.includes('permanent')}
+                                    >
+                                      <SelectTrigger className={`w-[60px] h-8 text-xs ${selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.type?.includes('permanent') ? 'opacity-50' : ''}`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="seconds">S</SelectItem>
+                                        <SelectItem value="minutes">Min</SelectItem>
+                                        <SelectItem value="hours">H</SelectItem>
+                                        <SelectItem value="days">D</SelectItem>
+                                        <SelectItem value="weeks">W</SelectItem>
+                                        <SelectItem value="months">M</SelectItem>
+                                      </SelectContent>
+                                    </Select>                                    <Select
+                                      value={selectedPunishment.durations?.severe[offenseType as keyof typeof selectedPunishment.durations.severe]?.type || 'mute'}
+                                      onValueChange={(type) => {
+                                        setSelectedPunishment(prev => prev && prev.durations ? {
+                                          ...prev,
+                                          durations: {
+                                            ...prev.durations,
+                                            severe: {
+                                              ...prev.durations.severe,
+                                              [offenseType]: {
+                                                ...prev.durations.severe[offenseType as keyof typeof prev.durations.severe],
+                                                type: type as 'mute' | 'ban' | 'permanent mute' | 'permanent ban'
+                                              }
+                                            }
+                                          }
+                                        } : null);
+                                      }}
+                                    >
+                                      <SelectTrigger className="w-[70px] h-8 text-xs">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="mute">Mute</SelectItem>
+                                        <SelectItem value="ban">Ban</SelectItem>
+                                        <SelectItem value="permanent mute">Permanent Mute</SelectItem>
+                                        <SelectItem value="permanent ban">Permanent Ban</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Points Configuration */}
+                      <div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Low Severity Points */}
+                          <div className="space-y-2">
+                            <Label className="font-medium">{t('settings.page.lowSeverityPoints')}</Label>
+                            <Input
+                              type="number"
+                              placeholder="Points"
+                              value={selectedPunishment.points?.low || ''}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  points: {
+                                    low: value,
+                                    regular: prev.points?.regular || 0,
+                                    severe: prev.points?.severe || 0
+                                  }
+                                } : null);
+                              }}
+                              className="text-center w-full"
+                            />
+                          </div>
+
+                          {/* Regular Severity Points */}
+                          <div className="space-y-2">
+                            <Label className="font-medium">{t('settings.page.regularSeverityPoints')}</Label>
+                            <Input
+                              type="number"
+                              placeholder="Points"
+                              value={selectedPunishment.points?.regular || ''}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  points: {
+                                    low: prev.points?.low || 0,
+                                    regular: value,
+                                    severe: prev.points?.severe || 0
+                                  }
+                                } : null);
+                              }}
+                              className="text-center w-full"
+                            />
+                          </div>
+
+                          {/* Severe Severity Points */}
+                          <div className="space-y-2">
+                            <Label className="font-medium">{t('settings.page.severeSeverityPoints')}</Label>
+                            <Input
+                              type="number"
+                              placeholder="Points"
+                              value={selectedPunishment.points?.severe || ''}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                setSelectedPunishment(prev => prev ? {
+                                  ...prev,
+                                  points: {
+                                    low: prev.points?.low || 0,
+                                    regular: prev.points?.regular || 0,
+                                    severe: value
+                                  }
+                                } : null);
+                              }}
+                              className="text-center w-full"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                      )}
+                    </>
+                  )}
+                </TabsContent>                {/* Appeal Form Configuration Tab */}
+                <TabsContent value="appeal-form" className="space-y-4 max-h-[60vh] overflow-y-auto">
+                  <div className="space-y-4">
+                    {/* Is Appealable Checkbox */}
+                    <div className="flex items-center space-x-3 p-4 border rounded-lg bg-card">
+                      <Checkbox
+                        id="isAppealable"
+                        checked={selectedPunishment.isAppealable ?? true}                        onCheckedChange={(checked: boolean) => {
+                          setSelectedPunishment(prev => prev ? {
+                            ...prev,
+                            isAppealable: checked === true
+                          } : null);
+                        }}
+                      />
+                      <div className="flex-1">
+                        <Label htmlFor="isAppealable" className="text-sm font-medium">
+                          {t('settings.page.isAppealable')}
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          {t('settings.page.isAppealableDesc')}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-base font-medium">{t('settings.page.appealFormConfiguration')}</h4>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {t('settings.page.appealFormConfigurationDesc')}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setIsAddAppealSectionDialogOpen(true)}
+                          disabled={selectedPunishment.isAppealable === false}
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          {t('settings.page.addSection')}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Appeal Form Sections and Fields */}
+                    <div className={`space-y-4 ${selectedPunishment.isAppealable === false ? 'opacity-50 pointer-events-none' : ''}`}>
+                      <DndProvider backend={HTML5Backend}>
+                        {selectedPunishment.appealForm?.sections
+                          ?.sort((a, b) => a.order - b.order)
+                          .map((section, index) => (
+                            <DraggableAppealFormSectionCard
+                              key={section.id}
+                              section={section}
+                              index={index}
+                              moveSection={moveAppealFormSection}
+                              selectedPunishment={selectedPunishment}
+                              onEditSection={onEditAppealFormSection}
+                              onDeleteSection={onDeleteAppealFormSection}
+                              onEditField={onEditAppealFormField}
+                              onDeleteField={onDeleteAppealFormField}
+                              onAddField={onAddAppealFormField}
+                              moveField={moveAppealFormField}
+                              moveFieldBetweenSections={moveAppealFormFieldBetweenSections}
+                            />
+                          ))}
+
+                        {/* Fields not in any section */}
+                        {selectedPunishment.appealForm?.fields
+                          ?.filter(field => !field.sectionId)
+                          ?.sort((a, b) => a.order - b.order)
+                          .map((field, index) => (
+                            <DraggableAppealFormFieldCard
+                              key={field.id}
+                              field={field}
+                              index={index}
+                              sectionId=""
+                              moveField={moveAppealFormField}
+                              moveFieldBetweenSections={moveAppealFormFieldBetweenSections}
+                              onEditField={onEditAppealFormField}
+                              onDeleteField={onDeleteAppealFormField}
+                            />
+                          ))}
+
+                        {(!selectedPunishment.appealForm?.fields || selectedPunishment.appealForm.fields.length === 0) && 
+                         (!selectedPunishment.appealForm?.sections || selectedPunishment.appealForm.sections.length === 0) && (
+                          <div className="text-center py-8 text-muted-foreground">
+                            <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                            <p className="text-sm">
+                              {selectedPunishment.isAppealable === false
+                                ? t('settings.page.appealsDisabled')
+                                : t('settings.page.noCustomAppealForm')
+                              }
+                            </p>
+                            <p className="text-xs mt-1">
+                              {selectedPunishment.isAppealable === false
+                                ? t('settings.page.appealsDisabledNote')
+                                : t('settings.page.defaultAppealFormNote')
+                              }
+                            </p>
+                          </div>
+                        )}
+                      </DndProvider>
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
+
+              <DialogFooter className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setSelectedPunishment(null)}
+                >
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (selectedPunishment) {
+                      try {
+                        // Map frontend field names to backend field names for the request
+                        const { isCustomizable, isAppealable, ...rest } = selectedPunishment;
+                        const requestBody = {
+                          ...rest,
+                          appealable: isAppealable,
+                        };
+                        const response = await apiFetch(`/v1/panel/settings/punishment-types/${selectedPunishment.ordinal}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(requestBody),
+                        });
+
+                        if (response.ok) {
+                          const savedType = await response.json();
+                          // Normalize the response to use frontend field names
+                          const normalizedSavedType = {
+                            ...savedType,
+                            isCustomizable: savedType.isCustomizable ?? savedType.customizable ?? false,
+                            isAppealable: savedType.isAppealable ?? savedType.appealable ?? true,
+                          };
+                          setPunishmentTypes(prev =>
+                            prev.map(pt => pt.id === selectedPunishment.id ? normalizedSavedType : pt)
+                          );
+                          queryClient.invalidateQueries({ queryKey: ['/v1/panel/settings/punishment-types'] });
+                          toast({
+                            title: t('settings.page.punishmentTypeUpdated'),
+                            description: t('settings.page.punishmentTypeUpdatedDesc', { name: selectedPunishment.name })
+                          });
+                        } else {
+                          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                          toast({
+                            title: t('toast.error'),
+                            description: errorData.error || t('settings.page.updatePunishmentTypeFailed'),
+                            variant: "destructive"
+                          });
+                        }
+                      } catch (error) {
+                        console.error('Failed to update punishment type:', error);
+                        toast({
+                          title: t('toast.error'),
+                          description: t('settings.page.updatePunishmentTypeFailed'),
+                          variant: "destructive"
+                        });
+                      }
+                    }
+                    setSelectedPunishment(null);
+                  }}
+                >
+                  {t('common.saveChanges')}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Add/Edit Appeal Form Field Dialog */}
+        {isAddAppealFieldDialogOpen && (
+          <Dialog open={isAddAppealFieldDialogOpen} onOpenChange={setIsAddAppealFieldDialogOpen}>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>
+                  {selectedAppealField ? 'Edit Appeal Form Field' : 'Add Appeal Form Field'}
+                </DialogTitle>
+                <DialogDescription>
+                  Configure a custom field for the appeal form for this punishment type.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Field Label */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-label">Field Label</Label>
+                  <Input
+                    id="field-label"
+                    placeholder="e.g., Reason for Appeal"
+                    value={newAppealFieldLabel}
+                    onChange={(e) => setNewAppealFieldLabel(e.target.value)}
+                  />
+                </div>
+
+                {/* Field Type */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-type">Field Type</Label>
+                  <Select
+                    value={newAppealFieldType}
+                    onValueChange={(value: 'text' | 'textarea' | 'dropdown' | 'multiple_choice' | 'checkbox' | 'file_upload' | 'checkboxes') => setNewAppealFieldType(value)}
+                  >
+                    <SelectTrigger id="field-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">Text Input</SelectItem>
+                      <SelectItem value="textarea">Textarea</SelectItem>
+                      <SelectItem value="dropdown">Dropdown</SelectItem>
+                      <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
+                      <SelectItem value="checkbox">Checkbox</SelectItem>
+                      <SelectItem value="checkboxes">Checkboxes</SelectItem>
+                      <SelectItem value="file_upload">File Upload</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Field Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-description">Description (Optional)</Label>
+                  <Input
+                    id="field-description"
+                    placeholder="Help text for this field"
+                    value={newAppealFieldDescription}
+                    onChange={(e) => setNewAppealFieldDescription(e.target.value)}
+                  />
+                </div>
+
+                {/* Required Toggle */}
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="field-required"
+                    checked={newAppealFieldRequired}
+                    onCheckedChange={setNewAppealFieldRequired}
+                  />
+                  <Label htmlFor="field-required">Required Field</Label>
+                </div>
+
+                {/* Section Assignment */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-section">Section</Label>
+                  <Select
+                    value={newAppealFieldSectionId}
+                    onValueChange={setNewAppealFieldSectionId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select section" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectedPunishment?.appealForm?.sections
+                        ?.sort((a, b) => a.order - b.order)
+                        .map(section => (
+                          <SelectItem key={section.id} value={section.id}>
+                            {section.title}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Dropdown/Multiple Choice Options */}
+                {(newAppealFieldType === 'dropdown' || newAppealFieldType === 'multiple_choice') && (
+                  <div className="space-y-2">
+                    <Label>{newAppealFieldType === 'dropdown' ? 'Dropdown' : 'Multiple Choice'} Options</Label>
+                    <div className="space-y-2">
+                      {newAppealFieldOptions.map((option, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <Input value={option} readOnly className="flex-1" />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              const updatedOptions = newAppealFieldOptions.filter((_, i) => i !== index);
+                              setNewAppealFieldOptions(updatedOptions);
+                            }}
+                            className="h-9 w-9 text-muted-foreground hover:text-destructive"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Add option"
+                          value={newOption}
+                          onChange={(e) => setNewOption(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (newOption.trim()) {
+                                setNewAppealFieldOptions(prev => [...prev, newOption.trim()]);
+                                setNewOption('');
+                              }
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            if (newOption.trim()) {
+                              setNewAppealFieldOptions(prev => [...prev, newOption.trim()]);
+                              setNewOption('');
+                            }
+                          }}
+                          disabled={!newOption.trim()}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-Option Section Navigation for Dropdown/Multiple Choice Fields */}
+                {(newAppealFieldType === 'dropdown' || newAppealFieldType === 'multiple_choice') && newAppealFieldOptions.length > 0 && (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsAppealOptionNavigationExpanded(!isAppealOptionNavigationExpanded)}
+                      className="flex items-center gap-2 hover:bg-muted/50 p-1 rounded -ml-1 transition-colors"
+                    >
+                      {isAppealOptionNavigationExpanded ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                      <Label className="text-sm font-medium cursor-pointer">Option Navigation (Optional)</Label>
+                    </button>
+                    
+                    {isAppealOptionNavigationExpanded && (
+                      <div className="pl-6 space-y-3">
+                        <p className="text-xs text-muted-foreground">
+                          Configure which section to show when each option is selected.
+                        </p>
+                        {newAppealFieldOptions.map((option, index) => (
+                          <div key={index} className="flex items-center gap-3">
+                            <div className="flex-1">
+                              <Label className="text-sm font-medium">{option}</Label>
+                            </div>
+                            <div className="flex-1">
+                              <Select
+                                value={newAppealFieldOptionSectionMapping[option] || ''}
+                                onValueChange={(value) => 
+                                  setNewAppealFieldOptionSectionMapping(prev => ({
+                                    ...prev,
+                                    [option]: value
+                                  }))
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="No navigation" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__none__">No navigation</SelectItem>
+                                  {selectedPunishment?.appealForm?.sections
+                                    ?.filter(section => section.id !== newAppealFieldSectionId || !newAppealFieldSectionId)
+                                    ?.sort((a, b) => a.order - b.order)
+                                    .map(section => (
+                                      <SelectItem key={section.id} value={section.id}>
+                                        {section.title}
+                                      </SelectItem>
+                                    ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsAddAppealFieldDialogOpen(false);
+                    setSelectedAppealField(null);
+                    setNewAppealFieldLabel('');
+                    setNewAppealFieldType('text');
+                    setNewAppealFieldDescription('');
+                    setNewAppealFieldRequired(false);
+                    setNewAppealFieldOptions([]);
+                    setNewAppealFieldSectionId('');
+                    setNewAppealFieldOptionSectionMapping({});
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={addAppealFormField}
+                  disabled={!newAppealFieldLabel.trim()}
+                >
+                  {selectedAppealField ? 'Update Field' : 'Add Field'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Add/Edit Appeal Form Section Dialog */}
+        {isAddAppealSectionDialogOpen && (
+          <Dialog open={isAddAppealSectionDialogOpen} onOpenChange={setIsAddAppealSectionDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{selectedAppealSection ? 'Edit Section' : 'Add Section'}</DialogTitle>
+                <DialogDescription>
+                  {selectedAppealSection ? 'Update the section details below.' : 'Create a new section for organizing appeal form fields.'}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Section Title */}
+                <div className="space-y-2">
+                  <Label htmlFor="section-title">Section Title</Label>
+                  <Input
+                    id="section-title"
+                    placeholder="Enter section title"
+                    value={newAppealSectionTitle}
+                    onChange={(e) => setNewAppealSectionTitle(e.target.value)}
+                  />
+                </div>
+
+                {/* Section Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="section-description">Description (Optional)</Label>
+                  <Input
+                    id="section-description"
+                    placeholder="Enter section description"
+                    value={newAppealSectionDescription}
+                    onChange={(e) => setNewAppealSectionDescription(e.target.value)}
+                  />
+                </div>
+
+                {/* Hide by Default Option */}
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="hide-by-default"
+                    checked={newAppealSectionHideByDefault}
+                    onCheckedChange={setNewAppealSectionHideByDefault}
+                  />
+                  <Label htmlFor="hide-by-default">Hide by default</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Section will be hidden unless revealed by option navigation
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsAddAppealSectionDialogOpen(false);
+                    setSelectedAppealSection(null);
+                    setNewAppealSectionTitle('');
+                    setNewAppealSectionDescription('');
+                    setNewAppealSectionHideByDefault(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={addAppealFormSection}
+                  disabled={!newAppealSectionTitle.trim()}
+                >
+                  {selectedAppealSection ? 'Update Section' : 'Add Section'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Add AI Punishment Type Dialog */}
+        {isAddAIPunishmentDialogOpen && selectedPunishmentTypeId && (
+          <Dialog open={isAddAIPunishmentDialogOpen} onOpenChange={setIsAddAIPunishmentDialogOpen}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Enable AI Punishment Type</DialogTitle>
+                <DialogDescription>
+                  {(() => {
+                    const selectedType = availablePunishmentTypes.find(t => t.id === selectedPunishmentTypeId);
+                    return selectedType ? `Configure AI description for "${selectedType.name}" punishment type.` : 'Configure AI description for the selected punishment type.';
+                  })()}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Show selected punishment type details */}
+                {(() => {
+                  const selectedType = availablePunishmentTypes.find(t => t.id === selectedPunishmentTypeId);
+                  return selectedType ? (
+                    <div className="bg-muted/30 p-3 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h5 className="font-medium">{selectedType.name}</h5>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="outline" className="text-xs">
+                              {selectedType.category}
+                            </Badge>
+                            <Badge variant="secondary" className="text-xs">
+                              Ordinal: {selectedType.ordinal}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* AI Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="ai-punishment-desc">AI Description</Label>
+                  <textarea
+                    id="ai-punishment-desc"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-[100px]"
+                    placeholder="Describe when this punishment type should be used. Be specific about the behaviors or violations it covers."
+                    value={newAIPunishmentDescription}
+                    onChange={(e) => setNewAIPunishmentDescription(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    This description helps the AI understand when to suggest this punishment type.
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsAddAIPunishmentDialogOpen(false);
+                    setNewAIPunishmentDescription('');
+                    setSelectedPunishmentTypeId(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (selectedPunishmentTypeId && newAIPunishmentDescription.trim()) {
+                      await addAiPunishmentType(selectedPunishmentTypeId, newAIPunishmentDescription.trim());
+                      setIsAddAIPunishmentDialogOpen(false);
+                      setNewAIPunishmentDescription('');
+                      setSelectedPunishmentTypeId(null);
+                    }
+                  }}
+                  disabled={!newAIPunishmentDescription.trim()}
+                >
+                  Enable for AI
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Edit AI Punishment Type Dialog */}
+        {selectedAIPunishmentType && (
+          <Dialog open={Boolean(selectedAIPunishmentType)} onOpenChange={() => setSelectedAIPunishmentType(null)}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Edit AI Punishment Configuration</DialogTitle>
+                <DialogDescription>
+                  Update the AI description for "{selectedAIPunishmentType.name}".
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Show punishment type details (read-only) */}
+                <div className="bg-muted/30 p-3 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h5 className="font-medium">{selectedAIPunishmentType.name}</h5>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge variant="outline" className="text-xs">
+                          {selectedAIPunishmentType.category}
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs">
+                          Ordinal: {selectedAIPunishmentType.ordinal}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Punishment type details are inherited from the main punishment configuration and cannot be edited here.
+                  </p>
+                </div>
+
+                {/* AI Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="edit-ai-punishment-desc">AI Description</Label>
+                  <textarea
+                    id="edit-ai-punishment-desc"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-[100px]"
+                    value={selectedAIPunishmentType.aiDescription}
+                    onChange={(e) => setSelectedAIPunishmentType(prev => prev ? { ...prev, aiDescription: e.target.value } : null)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    This description helps the AI understand when to suggest this punishment type.
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setSelectedAIPunishmentType(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (selectedAIPunishmentType && selectedAIPunishmentType.aiDescription.trim()) {
+                      updateAiPunishmentType(selectedAIPunishmentType.id, { 
+                        aiDescription: selectedAIPunishmentType.aiDescription.trim() 
+                      });
+                      setSelectedAIPunishmentType(null);
+                    }
+                  }}
+                  disabled={!selectedAIPunishmentType?.aiDescription.trim()}
+                >
+                  Save Changes
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Add/Edit Ticket Form Field Dialog */}
+        {isAddTicketFormFieldDialogOpen && (
+          <Dialog open={isAddTicketFormFieldDialogOpen} onOpenChange={setIsAddTicketFormFieldDialogOpen}>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>
+                  {selectedTicketFormField ? 'Edit Form Field' : 'Add Form Field'}
+                </DialogTitle>
+                <DialogDescription>
+                  Configure a custom field for the {selectedTicketFormType} form.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Field Label */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-label">Field Label</Label>
+                  <Input
+                    id="field-label"
+                    placeholder="Enter field label"
+                    value={newTicketFormFieldLabel}
+                    onChange={(e) => setNewTicketFormFieldLabel(e.target.value)}
+                  />
+                </div>
+
+                {/* Field Type */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-type">Field Type</Label>
+                  <Select value={newTicketFormFieldType} onValueChange={(value: 'text' | 'textarea' | 'dropdown' | 'multiple_choice' | 'checkbox' | 'file_upload' | 'checkboxes') => setNewTicketFormFieldType(value)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">Text Input</SelectItem>
+                      <SelectItem value="textarea">Textarea</SelectItem>
+                      <SelectItem value="dropdown">Dropdown</SelectItem>
+                      <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
+                      <SelectItem value="checkbox">Checkbox</SelectItem>
+                      <SelectItem value="checkboxes">Checkboxes</SelectItem>
+                      <SelectItem value="file_upload">File Upload</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Field Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-description">Description (Optional)</Label>
+                  <Input
+                    id="field-description"
+                    placeholder="Enter field description"
+                    value={newTicketFormFieldDescription}
+                    onChange={(e) => setNewTicketFormFieldDescription(e.target.value)}
+                  />
+                </div>
+
+                {/* Required Toggle */}
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="field-required"
+                    checked={newTicketFormFieldRequired}
+                    onCheckedChange={setNewTicketFormFieldRequired}
+                  />
+                  <Label htmlFor="field-required">Required Field</Label>
+                </div>
+
+                {/* Section Assignment */}
+                <div className="space-y-2">
+                  <Label htmlFor="field-section">Section</Label>
+                  <Select
+                    value={newTicketFormFieldSectionId}
+                    onValueChange={setNewTicketFormFieldSectionId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select section" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ticketForms[selectedTicketFormType]?.sections
+                        ?.sort((a, b) => a.order - b.order)
+                        .map(section => (
+                          <SelectItem key={section.id} value={section.id}>
+                            {section.title}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Dropdown/Multiple Choice Options */}
+                {(newTicketFormFieldType === 'dropdown' || newTicketFormFieldType === 'multiple_choice') && (
+                  <div className="space-y-2">
+                    <Label>{newTicketFormFieldType === 'dropdown' ? 'Dropdown' : 'Multiple Choice'} Options</Label>
+                    <div className="space-y-2">
+                      {newTicketFormFieldOptions.map((option, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <Input value={option} readOnly className="flex-1" />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removeTicketFormFieldOption(index)}
+                            className="h-9 w-9 text-muted-foreground hover:text-destructive"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Add option"
+                          value={newTicketFormOption}
+                          onChange={(e) => setNewTicketFormOption(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              addNewTicketFormFieldOption();
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          onClick={addNewTicketFormFieldOption}
+                          disabled={!newTicketFormOption.trim()}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-Option Section Navigation for Dropdown/Multiple Choice Fields */}
+                {(newTicketFormFieldType === 'dropdown' || newTicketFormFieldType === 'multiple_choice') && newTicketFormFieldOptions.length > 0 && (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsOptionNavigationExpanded(!isOptionNavigationExpanded)}
+                      className="flex items-center gap-2 hover:bg-muted/50 p-1 rounded -ml-1 transition-colors"
+                    >
+                      {isOptionNavigationExpanded ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                      <Label className="text-sm font-medium cursor-pointer">Option Navigation (Optional)</Label>
+                    </button>
+                    
+                    {isOptionNavigationExpanded && (
+                      <div className="pl-6 space-y-3">
+                        <p className="text-xs text-muted-foreground">
+                          Configure which section to show when each option is selected.
+                        </p>
+                        {newTicketFormFieldOptions.map((option, index) => (
+                          <div key={index} className="flex items-center gap-3">
+                            <div className="flex-1">
+                              <Label className="text-sm font-medium">{option}</Label>
+                            </div>
+                            <div className="flex-1">
+                              <Select
+                                value={newTicketFormFieldOptionSectionMapping[option] || '__none__'}
+                                onValueChange={(value) => 
+                                  setNewTicketFormFieldOptionSectionMapping(prev => ({
+                                    ...prev,
+                                    [option]: value
+                                  }))
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="No navigation" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__none__">No navigation</SelectItem>
+                                  {ticketForms[selectedTicketFormType]?.sections
+                                    ?.filter(section => section.id !== newTicketFormFieldSectionId || !newTicketFormFieldSectionId)
+                                    ?.sort((a, b) => a.order - b.order)
+                                    .map(section => (
+                                      <SelectItem key={section.id} value={section.id}>
+                                        {section.title}
+                                      </SelectItem>
+                                    ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsAddTicketFormFieldDialogOpen(false);
+                    setSelectedTicketFormField(null);
+                    setNewTicketFormFieldLabel('');
+                    setNewTicketFormFieldType('text');
+                    setNewTicketFormFieldDescription('');
+                    setNewTicketFormFieldRequired(false);
+                    setNewTicketFormFieldOptions([]);
+                    setNewTicketFormFieldSectionId('');
+                    setNewTicketFormFieldGoToSection('');
+                    setNewTicketFormFieldOptionSectionMapping({});
+                    setIsOptionNavigationExpanded(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={addTicketFormField}
+                  disabled={!newTicketFormFieldLabel.trim()}
+                >
+                  {selectedTicketFormField ? 'Update Field' : 'Add Field'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Add Section Dialog */}
+        {isAddTicketFormSectionDialogOpen && (
+          <Dialog open={isAddTicketFormSectionDialogOpen} onOpenChange={setIsAddTicketFormSectionDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{selectedTicketFormSection ? 'Edit Section' : 'Add Section'}</DialogTitle>
+                <DialogDescription>
+                  {selectedTicketFormSection ? 'Update the section details below.' : 'Create a new section for organizing form fields.'}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Section Title */}
+                <div className="space-y-2">
+                  <Label htmlFor="section-title">Section Title</Label>
+                  <Input
+                    id="section-title"
+                    placeholder="Enter section title"
+                    value={newTicketFormSectionTitle}
+                    onChange={(e) => setNewTicketFormSectionTitle(e.target.value)}
+                  />
+                </div>
+
+                {/* Section Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="section-description">Description (Optional)</Label>
+                  <Input
+                    id="section-description"
+                    placeholder="Enter section description"
+                    value={newTicketFormSectionDescription}
+                    onChange={(e) => setNewTicketFormSectionDescription(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsAddTicketFormSectionDialogOpen(false);
+                    setSelectedTicketFormSection(null);
+                    setNewTicketFormSectionTitle('');
+                    setNewTicketFormSectionDescription('');
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={addTicketFormSection}
+                  disabled={!newTicketFormSectionTitle.trim()}
+                >
+                  {selectedTicketFormSection ? 'Update Section' : 'Add Section'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+      </div>
+    </PageContainer>
+  );
+};
+
+export default Settings;

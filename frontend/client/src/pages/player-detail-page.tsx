@@ -1,0 +1,2356 @@
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useRoute, useLocation } from 'wouter';
+import {
+  ArrowLeft, RefreshCcw, Search, History,
+  Link2, StickyNote, Ticket, UserRound, Shield, FileText, Loader2,
+  ChevronDown, ChevronRight, Settings, Plus, X, Play
+} from 'lucide-react';
+import { getAvatarUrl } from '@/lib/api';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { Skeleton } from '@modl-gg/shared-web/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@modl-gg/shared-web/components/ui/tabs';
+import { usePlayer, useApplyPunishment, useSettings, usePunishmentTypes, usePlayerAllTickets, useModifyPunishment, useAddPunishmentNote, useModifyPunishmentTickets, useLinkedAccounts, useFindLinkedAccounts, useLinkedBansForPunishment } from '@/hooks/use-data';
+import { useAuth } from '@/hooks/use-auth';
+import { usePermissions } from '@/hooks/use-permissions';
+import { useIsMobile } from '@modl-gg/shared-web/hooks/use-mobile';
+import { toast } from '@modl-gg/shared-web/hooks/use-toast';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@modl-gg/shared-web/components/ui/select';
+import PlayerPunishment from '@/components/ui/player-punishment';
+import MediaUpload from '@/components/MediaUpload';
+import PlayerReplaysList from '@/components/player-replays-list';
+import { formatDateWithTime } from '@/utils/date-utils';
+import { apiFetch } from '@/lib/api';
+import { EvidenceList, type EvidenceValue } from '@/components/ui/evidence-list';
+import { formatTicketStatusLabel, normalizeTicketStatus } from '@/lib/ticket-enums';
+import { playerFacingReason, requiresPlayerFacingReason } from '@/utils/manual-punishment';
+import { PunishmentStatusBadge } from '@/components/ui/punishment-status-badge';
+import {
+  derivePunishmentStatusFromState,
+  getEffectivePunishmentState,
+  type EffectivePunishmentState,
+} from '@/utils/punishment-status';
+
+type PlayerDetail = NonNullable<ReturnType<typeof usePlayer>['data']>;
+type PlayerPunishment = PlayerDetail['punishments'][number];
+type PlayerModification = PlayerPunishment['modifications'][number];
+
+interface StatusThresholds {
+  social?: { medium: number; habitual: number };
+  gameplay?: { medium: number; habitual: number };
+}
+
+interface WarningEntry {
+  type: string;
+  reason: string;
+  date: string;
+  by: string;
+  id?: string;
+  severity?: string | null;
+  status?: string | null;
+  evidence?: PlayerPunishment['evidence'];
+  notes?: PlayerPunishment['notes'];
+  attachedTicketIds?: string[];
+  active?: boolean;
+  expires?: string | null;
+  started?: string | Date | null;
+  altBlocking?: boolean;
+  statWiping?: boolean;
+  modifications?: PlayerModification[];
+  duration?: number;
+  effectiveCategory?: string;
+}
+
+interface TicketView {
+  id?: string;
+  _id?: string;
+  type?: string;
+  category?: string;
+  subject?: string;
+  status?: string | null;
+  created?: string | null;
+  assignedTo?: string | string[];
+  locked?: boolean;
+  reportedPlayerUuid?: string;
+  reportedPlayer?: string;
+  creatorUuid?: string;
+  creatorName?: string;
+  tags?: string[];
+}
+
+interface PlayerInfo {
+  username: string;
+  status: string;
+  region: string;
+  country: string;
+  firstJoined: string;
+  lastOnline: string;
+  lastServer: string;
+  playtime: string;
+  social: string;
+  gameplay: string;
+  punishmentStatus: 'banned' | 'muted' | null;
+  previousNames: string[];
+  warnings: WarningEntry[];
+  linkedAccounts: Array<{username: string; uuid: string; statusText: string}>;
+  notes: string[];
+  newNote?: string;
+  isAddingNote?: boolean;
+  // Punishment note/modification fields
+  isAddingPunishmentNote?: boolean;
+  punishmentNoteTarget?: string | null;
+  newPunishmentNote?: string;
+  isAddingPunishmentEvidence?: boolean;
+  punishmentEvidenceTarget?: string | null;
+  newPunishmentEvidence?: string;
+  uploadedEvidenceFile?: {
+    url: string;
+    fileName: string;
+    fileType: string;
+    fileSize: number;
+  } | null;
+  isModifyingPunishment?: boolean;
+  modifyPunishmentTarget?: string | null;
+  modifyPunishmentAction?: 'modify' | null;
+  modifyPunishmentReason?: string;
+  selectedModificationType?: 'MANUAL_DURATION_CHANGE' | 'MANUAL_PARDON' | 'SET_ALT_BLOCKING_TRUE' | 'SET_WIPING_TRUE' | 'SET_ALT_BLOCKING_FALSE' | 'SET_WIPING_FALSE' | null;
+  newDuration?: {
+    value: number;
+    unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
+  };
+  // Ticket modification fields
+  isModifyingTickets?: boolean;
+  modifyTicketsTarget?: string | null;
+  modifyTicketsAssociated?: boolean;
+  modifyTicketsAdd?: string[];
+  modifyTicketsRemove?: string[];
+  // Punishment creation fields
+  selectedPunishmentCategory?: string;
+  selectedSeverity?: 'Lenient' | 'Regular' | 'Aggravated';
+  selectedOffenseLevel?: 'first' | 'medium' | 'habitual';
+  duration?: {
+    value: number;
+    unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
+  };
+  isPermanent?: boolean;
+  reason?: string;
+  evidence?: string;
+  evidenceList?: string[];
+  attachedReports?: string[];
+  banLinkedAccounts?: boolean;
+  wipeAccountAfterExpiry?: boolean;
+  kickSameIP?: boolean;
+  banToLink?: string;
+  staffNotes?: string;
+  silentPunishment?: boolean;
+  altBlocking?: boolean;
+  statWiping?: boolean;
+}
+
+interface PunishmentType {
+  id: number;
+  name: string;
+  category: 'Gameplay' | 'Social' | 'Administrative';
+  isCustomizable: boolean;
+  ordinal: number;
+  durations?: {
+    low: { 
+      first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+      medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+      habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+    };
+    regular: {
+      first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+      medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+      habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+    };
+    severe: {
+      first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+      medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+      habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; banValue?: number; banUnit?: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; };
+    };
+  };
+  points?: {
+    low: number;
+    regular: number;
+    severe: number;
+  };
+  customPoints?: number;
+  staffDescription?: string;
+  playerDescription?: string;
+  canBeAltBlocking?: boolean;
+  canBeStatWiping?: boolean;
+  isAppealable?: boolean;
+  singleSeverityPunishment?: boolean;
+  singleSeverityDurations?: {
+    first: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban'; };
+    medium: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban'; };
+    habitual: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'; type: 'mute' | 'ban'; };
+  };
+  singleSeverityPoints?: number;
+}
+
+const LinkedBansDisplayDetail = ({ punishmentId, onPlayerClick }: { punishmentId: string; onPlayerClick: (uuid: string) => void }) => {
+  const { data: linkedBans, isLoading } = useLinkedBansForPunishment(punishmentId);
+
+  if (isLoading) return <p className="text-xs text-muted-foreground">Loading linked bans...</p>;
+  if (!linkedBans || linkedBans.length === 0) return null;
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground mb-1">Linked Bans:</p>
+      <div className="flex flex-wrap gap-1">
+        {linkedBans.map((lb) => (
+          <Button
+            key={lb.punishmentId}
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => onPlayerClick(lb.playerUuid)}
+          >
+            <Link2 className="h-3 w-3 mr-1" />
+            {lb.playerName}
+            {lb.active && <Badge variant="destructive" className="ml-1 h-4 text-[10px] px-1">Active</Badge>}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const PlayerDetailPage = () => {
+  const { t } = useTranslation();
+  const [_, params] = useRoute('/panel/player/:uuid');
+  const [, navigate] = useLocation();
+  const playerId = params?.uuid || '';
+  const isMobile = useIsMobile();
+
+  const [activeTab, setActiveTab] = useState('history');
+  const [avatarError, setAvatarError] = useState(false);
+  const [avatarLoading, setAvatarLoading] = useState(true);
+  const [isApplyingPunishment, setIsApplyingPunishment] = useState(false);
+  const [expandedPunishments, setExpandedPunishments] = useState<Set<string>>(new Set());
+
+  // Get current authenticated user and permissions
+  const { user } = useAuth();
+  const { hasPermission } = usePermissions();
+
+  // Initialize the mutation hooks
+  const applyPunishment = useApplyPunishment();
+  const modifyPunishment = useModifyPunishment();
+  const addPunishmentNote = useAddPunishmentNote();
+  const modifyPunishmentTickets = useModifyPunishmentTickets();
+
+  // Use React Query hooks to fetch data
+  const { data: player, isLoading, error, refetch } = usePlayer(playerId);
+  const { data: playerTickets, isLoading: isLoadingTickets } = usePlayerAllTickets(playerId);
+  const { data: linkedAccountsData, isLoading: isLoadingLinkedAccounts, refetch: refetchLinkedAccounts } = useLinkedAccounts(playerId);
+  const findLinkedAccountsMutation = useFindLinkedAccounts();
+  const { data: settingsData, isLoading: isLoadingSettings } = useSettings();
+  const { data: punishmentTypesData, isLoading: isLoadingPunishmentTypes } = usePunishmentTypes();
+
+  // State to track if we've already triggered linked account search
+  const [hasTriggeredLinkedSearch, setHasTriggeredLinkedSearch] = useState(false);
+  
+  // Stable function to trigger linked account search
+  const triggerLinkedAccountSearch = useCallback(() => {
+    if (playerId && !hasTriggeredLinkedSearch && !findLinkedAccountsMutation.isPending) {
+      setHasTriggeredLinkedSearch(true);
+      findLinkedAccountsMutation.mutate(playerId, {
+        onError: (error) => {
+          console.error('Failed to trigger linked account search:', error);
+          setHasTriggeredLinkedSearch(false);
+        }
+      });
+    }
+  }, [playerId, hasTriggeredLinkedSearch]);
+
+  // Initialize player info state
+  const [playerInfo, setPlayerInfo] = useState<PlayerInfo>({
+    username: 'Loading...',
+    status: 'Unknown',
+    region: 'Unknown',
+    country: 'Unknown',
+    firstJoined: 'Unknown',
+    lastOnline: 'Unknown',
+    lastServer: 'Unknown',
+    playtime: 'Unknown',
+    social: 'Medium',
+    gameplay: 'Medium',
+    punishmentStatus: null,
+    previousNames: [],
+    warnings: [],
+    linkedAccounts: [],
+    notes: []
+  });
+
+  // Initialize punishment types state
+  const [punishmentTypesByCategory, setPunishmentTypesByCategory] = useState<{
+    Administrative: PunishmentType[], 
+    Social: PunishmentType[], 
+    Gameplay: PunishmentType[]
+  }>({
+    Administrative: [
+      // Administrative punishment types (ordinals 0-5, not customizable) - minimal fallback
+      { id: 0, name: 'Kick', category: 'Administrative', isCustomizable: false, ordinal: 0 },
+      { id: 1, name: 'Manual Mute', category: 'Administrative', isCustomizable: false, ordinal: 1 },
+      { id: 2, name: 'Manual Ban', category: 'Administrative', isCustomizable: false, ordinal: 2 },
+      { id: 3, name: 'Security Ban', category: 'Administrative', isCustomizable: false, ordinal: 3 },
+      { id: 4, name: 'Linked Ban', category: 'Administrative', isCustomizable: false, ordinal: 4 },
+      { id: 5, name: 'Blacklist', category: 'Administrative', isCustomizable: false, ordinal: 5 }
+    ],
+    Social: [],
+    Gameplay: []
+  });
+
+  // Reset avatar state when playerId changes
+  useEffect(() => {
+    setAvatarError(false);
+    setAvatarLoading(true);
+  }, [playerId]);
+
+  // Process punishment types data from dedicated endpoint
+  useEffect(() => {
+    if (punishmentTypesData && Array.isArray(punishmentTypesData)) {
+      try {
+        // Always ensure administrative punishment types are available
+        const defaultAdminTypes: PunishmentType[] = [
+          { id: 0, name: 'Kick', category: 'Administrative' as const, isCustomizable: false, ordinal: 0 },
+          { id: 1, name: 'Manual Mute', category: 'Administrative' as const, isCustomizable: false, ordinal: 1 },
+          { id: 2, name: 'Manual Ban', category: 'Administrative' as const, isCustomizable: false, ordinal: 2 },
+          { id: 3, name: 'Security Ban', category: 'Administrative' as const, isCustomizable: false, ordinal: 3 },
+          { id: 4, name: 'Linked Ban', category: 'Administrative' as const, isCustomizable: false, ordinal: 4 },
+          { id: 5, name: 'Blacklist', category: 'Administrative' as const, isCustomizable: false, ordinal: 5 }
+        ];
+
+        // Group punishment types by category
+        const loadedTypes = punishmentTypesData as unknown as PunishmentType[];
+        const adminFromSettings = loadedTypes.filter((pt: PunishmentType) => pt.category?.toLowerCase().trim() === 'administrative');
+
+        // Merge default admin types with any additional admin types from settings
+        // Default types take precedence (to ensure they're always available)
+        const mergedAdminTypes = [...defaultAdminTypes];
+        adminFromSettings.forEach((settingsType: PunishmentType) => {
+          if (!mergedAdminTypes.find(defaultType => defaultType.name === settingsType.name)) {
+            mergedAdminTypes.push(settingsType);
+          }
+        });
+
+        const categorized = {
+          Administrative: mergedAdminTypes.sort((a, b) => a.ordinal - b.ordinal),
+          Social: loadedTypes.filter((pt: PunishmentType) => pt.category?.toLowerCase().trim() === 'social').sort((a: PunishmentType, b: PunishmentType) => a.ordinal - b.ordinal),
+          Gameplay: loadedTypes.filter((pt: PunishmentType) => pt.category?.toLowerCase().trim() === 'gameplay').sort((a: PunishmentType, b: PunishmentType) => a.ordinal - b.ordinal)
+        };
+
+        // Update the state with the loaded punishment types
+        setPunishmentTypesByCategory(categorized);
+      } catch (error) {
+        console.error("Error processing punishment types:", error);
+      }
+    }
+  }, [punishmentTypesData]);
+
+  // Filter punishment types by user's punishment.apply.* permissions
+  const filteredPunishmentTypesByCategory = useMemo(() => {
+    const filterByPermission = (types: PunishmentType[]) =>
+      types.filter(type => {
+        const permId = 'punishment.apply.' + type.name.toLowerCase().replace(/ /g, '-');
+        return hasPermission(permId);
+      });
+
+    return {
+      Administrative: filterByPermission(punishmentTypesByCategory.Administrative),
+      Social: filterByPermission(punishmentTypesByCategory.Social),
+      Gameplay: filterByPermission(punishmentTypesByCategory.Gameplay),
+    };
+  }, [punishmentTypesByCategory, hasPermission]);
+
+  // Calculate player status based on punishments and settings
+  const calculatePlayerStatus = (punishments: PlayerPunishment[], punishmentTypes: PunishmentType[], statusThresholds: StatusThresholds) => {
+    let socialPoints = 0;
+    let gameplayPoints = 0;
+
+    // Calculate points from active punishments
+    for (const punishment of punishments) {
+      // Check if punishment is effectively active (considering modifications)
+      const effectiveState = getEffectivePunishmentState(punishment);
+      const isActive = effectiveState.effectiveActive;
+      if (!isActive) continue;
+
+      // Find punishment type
+      const punishmentType = punishmentTypes.find(pt => pt.ordinal === punishment.typeOrdinal);
+      if (!punishmentType) continue;
+
+      // Get points based on severity or single severity
+      let points = 0;
+      const severity = punishment.severity;
+
+      if (punishmentType.customPoints !== undefined) {
+        // Custom points for permanent punishments (like Bad Skin, Bad Name)
+        points = punishmentType.customPoints;
+      } else if (punishmentType.singleSeverityPoints !== undefined) {
+        // Single severity punishment
+        points = punishmentType.singleSeverityPoints;
+      } else if (punishmentType.points && severity) {
+        // Multi-severity punishment
+        const severityLower = severity.toLowerCase();
+        if (severityLower === 'low' || severityLower === 'lenient') {
+          points = punishmentType.points.low;
+        } else if (severityLower === 'regular' || severityLower === 'medium') {
+          points = punishmentType.points.regular;
+        } else if (severityLower === 'severe' || severityLower === 'aggravated' || severityLower === 'high') {
+          points = punishmentType.points.severe;
+        }
+      }
+
+      // Add points to appropriate category
+      if (punishmentType.category === 'Social') {
+        socialPoints += points;
+      } else if (punishmentType.category === 'Gameplay') {
+        gameplayPoints += points;
+      }
+      // Administrative punishments don't contribute to status points
+    }
+
+    // Determine status based on thresholds
+    const getStatusLevel = (points: number, thresholds: { medium: number; habitual: number }) => {
+      if (points >= thresholds.habitual) {
+        return 'Habitual';
+      } else if (points >= thresholds.medium) {
+        return 'Medium';
+      } else {
+        return 'Low';
+      }
+    };
+
+    const socialStatus = getStatusLevel(socialPoints, statusThresholds?.social || { medium: 4, habitual: 8 });
+    const gameplayStatus = getStatusLevel(gameplayPoints, statusThresholds?.gameplay || { medium: 5, habitual: 10 });
+
+    return {
+      social: socialStatus,
+      gameplay: gameplayStatus,
+      socialPoints,
+      gameplayPoints
+    };
+  };
+
+  // Helper function to safely get data from player.data (handles both Map and plain object)
+  const getPlayerData = (player: PlayerDetail | null | undefined, key: string): unknown => {
+    const data = player?.data;
+    if (!data) return undefined;
+    return data[key];
+  };
+
+  // Helper function to check if a value is a valid display value for badges
+  const isValidBadgeValue = (value: unknown): boolean => {
+    if (!value || value === null || value === undefined) return false;
+    if (typeof value === 'number' && value === 0) return false;
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return false;
+    if (trimmed === '0' || trimmed === 'null' || trimmed === 'undefined' || trimmed === 'false') return false;
+    return true;
+  };
+
+  const isPunishmentCurrentlyActive = (
+    warning: WarningEntry,
+    effectiveState: EffectivePunishmentState<PlayerModification>,
+  ) => derivePunishmentStatusFromState(warning, effectiveState) === 'active';
+
+  // Helper function to format duration in milliseconds to human readable
+  const formatDuration = (milliseconds: number) => {
+    if (milliseconds === 0 || milliseconds === -1 || milliseconds < 0) {
+      return 'Permanent';
+    }
+    
+    const seconds = Math.floor(milliseconds / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    const weeks = Math.floor(days / 7);
+    const months = Math.floor(days / 30);
+    
+    if (months > 0) {
+      return `${months} month${months > 1 ? 's' : ''}`;
+    } else if (weeks > 0) {
+      return `${weeks} week${weeks > 1 ? 's' : ''}`;
+    } else if (days > 0) {
+      return `${days} day${days > 1 ? 's' : ''}`;
+    } else if (hours > 0) {
+      return `${hours} hour${hours > 1 ? 's' : ''}`;
+    } else if (minutes > 0) {
+      return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+    } else {
+      return `${seconds} second${seconds > 1 ? 's' : ''}`;
+    }
+  };
+
+  // Load player data into state when it changes
+  useEffect(() => {
+    if (player) {
+      // Check if we're dealing with MongoDB data or the API response format
+      if (player.usernames) {
+        // This is MongoDB raw data that needs formatting
+        const currentUsername = player.usernames.length > 0
+          ? player.usernames[player.usernames.length - 1]?.username ?? 'Unknown'
+          : 'Unknown';
+
+        const firstJoined = player.usernames.length > 0
+          ? formatDateWithTime(player.usernames[0]?.date)
+          : 'Unknown';
+
+        // Get previous usernames
+        const previousNames = player.usernames.length > 1
+          ? player.usernames
+              .slice(0, -1) // All except the most recent
+              .map((u) => u.username)
+          : [];
+
+        // Determine player status using effectiveCategory from backend
+        const activePunishments = player.punishments.filter((p) =>
+          p.active && p.typeOrdinal !== 0 // Exclude kicks (ordinal 0) completely
+        );
+
+        const hasActiveBan = activePunishments.some((p) => p.effectiveCategory === 'BAN');
+        const hasActiveMute = activePunishments.some((p) => p.effectiveCategory === 'MUTE');
+
+        const status = hasActiveBan
+          ? 'Banned'
+          : hasActiveMute
+          ? 'Muted'
+          : activePunishments.length > 0
+          ? 'Restricted'
+          : 'Active';
+        
+        // Initialize warnings array
+        const warnings: WarningEntry[] = [];
+
+        // Add punishments to warnings with full details
+        if (player.punishments) {
+          player.punishments.forEach((punishment: PlayerPunishment) => {
+            // Determine punishment type name from ordinal using settings data
+            const getPunishmentTypeName = (ordinal: number) => {
+              // First check all loaded punishment types from settings
+              const allTypes = [
+                ...punishmentTypesByCategory.Administrative,
+                ...punishmentTypesByCategory.Social,
+                ...punishmentTypesByCategory.Gameplay
+              ];
+              
+              const foundType = allTypes.find(type => type.ordinal === ordinal);
+              if (foundType) {
+                return foundType.name;
+              }
+              
+              // Fallback for unknown ordinals
+              return `Unknown Punishment ${ordinal}`;
+            };
+            
+            const punishmentType = getPunishmentTypeName(punishment.typeOrdinal);
+            
+            // Use staff notes as the main reason text
+            let displayReason = '';
+            if (punishment.notes && punishment.notes.length > 0) {
+              // Use first note as the main reason (for both manual and automatic punishments)
+              const firstNote = punishment.notes[0];
+              displayReason = typeof firstNote === 'string' ? firstNote : firstNote?.text ?? '';
+            } else {
+              // Fallback if no notes available
+              displayReason = 'No additional details';
+            }
+            
+            warnings.push({
+              type: punishmentType,
+              reason: displayReason,
+              date: formatDateWithTime(punishment.issued),
+              by: punishment.issuerName,
+              // Additional punishment details
+              id: punishment.id,
+              severity: (() => {
+                // For linked bans (typeOrdinal 4), severity should always be null
+                if (punishment.typeOrdinal === 4) return null;
+                const severity = punishment.severity;
+                return severity === '0' || severity === undefined ? null : severity;
+              })(),
+              status: (() => {
+                // For linked bans (typeOrdinal 4), status should always be null
+                if (punishment.typeOrdinal === 4) return null;
+                const status = punishment.status;
+                return status === '0' || status === undefined ? null : status;
+              })(),
+              evidence: punishment.evidence || [],
+              notes: punishment.notes || [],
+              attachedTicketIds: punishment.attachedTicketIds || [],
+              active: punishment.active,
+              modifications: punishment.modifications || [],
+              expires: punishment.expires || null,
+              altBlocking: punishment.altBlocking ?? false,
+              statWiping: punishment.statWiping ?? false,
+              effectiveCategory: punishment.effectiveCategory,
+              started: punishment.started
+            });
+          });
+        }
+        
+        // Extract notes
+        const notes = player.notes
+          ? player.notes.map((note) => `${note.text} (Added by ${note.issuerName} on ${formatDateWithTime(note.date)})`)
+          : [];
+        
+        // Extract linked accounts from API data
+        const linkedAccounts: Array<{username: string; uuid: string; statusText: string}> = [];
+        
+        if (linkedAccountsData?.linkedAccounts && Array.isArray(linkedAccountsData.linkedAccounts)) {
+          linkedAccountsData.linkedAccounts.forEach((account) => {
+            const statusInfo = [];
+            if (account.activeBans > 0) statusInfo.push(`${account.activeBans} active ban${account.activeBans > 1 ? 's' : ''}`);
+            if (account.activeMutes > 0) statusInfo.push(`${account.activeMutes} active mute${account.activeMutes > 1 ? 's' : ''}`);
+
+            const statusText = statusInfo.length > 0 ? ` (${statusInfo.join(', ')})` : '';
+            linkedAccounts.push({
+              username: account.username,
+              uuid: account.minecraftUuid,
+              statusText: statusText
+            });
+          });
+        }
+        
+        // Calculate player status using punishment points and thresholds
+        const allPunishmentTypes = [
+          ...punishmentTypesByCategory.Administrative,
+          ...punishmentTypesByCategory.Social,
+          ...punishmentTypesByCategory.Gameplay
+        ];
+        
+        // Get status thresholds from settings
+        const statusThresholds: StatusThresholds = { social: { medium: 4, habitual: 8 }, gameplay: { medium: 5, habitual: 10 } };
+
+        const calculatedStatus = calculatePlayerStatus(player.punishments || [], allPunishmentTypes, statusThresholds);
+        
+        // Sort warnings by date (most recent first)
+        warnings.sort((a, b) => {
+          const dateA = new Date(a.date || 0).getTime();
+          const dateB = new Date(b.date || 0).getTime();
+          return dateB - dateA; // Descending order (newest first)
+        });
+        
+        setPlayerInfo(prev => ({
+          ...prev,
+          username: currentUsername,
+          status: getPlayerData(player, 'isOnline') ? 'Online' : (status === 'Active' ? 'Offline' : status),
+          region: player.latestIPData?.region || 'Unknown',
+          country: player.latestIPData?.country || 'Unknown',
+          firstJoined: firstJoined,
+          lastOnline: getPlayerData(player, 'isOnline') ? 'Online' :
+            (getPlayerData(player, 'lastLogout') || getPlayerData(player, 'lastDisconnect') ?
+              formatDateWithTime((getPlayerData(player, 'lastLogout') || getPlayerData(player, 'lastDisconnect')) as string | null | undefined) :
+              (player.ipAddresses?.length ? formatDateWithTime(player.ipAddresses[player.ipAddresses.length - 1]?.logins?.slice(-1)?.[0] || player.ipAddresses[player.ipAddresses.length - 1]?.firstLogin) :
+              'Unknown')),
+          lastServer: player.lastServer || 'Unknown',
+          playtime: (() => {
+            const totalSeconds = (getPlayerData(player, 'totalPlaytimeSeconds') as number | undefined) || 0;
+            if (totalSeconds > 0) {
+              const hours = Math.floor(totalSeconds / 3600);
+              const minutes = Math.floor((totalSeconds % 3600) / 60);
+              return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+            }
+            return 'Not tracked';
+          })(),
+          social: calculatedStatus.social,
+          gameplay: calculatedStatus.gameplay,
+          punishmentStatus: hasActiveBan ? 'banned' : hasActiveMute ? 'muted' : null,
+          previousNames: previousNames,
+          warnings: warnings,
+          linkedAccounts: linkedAccounts,
+          notes: notes
+        }));
+      }
+    }
+  }, [player, punishmentTypesByCategory, settingsData, linkedAccountsData]);
+
+  // Trigger linked account search when player data is loaded
+  useEffect(() => {
+    if (player && playerId) {
+      triggerLinkedAccountSearch();
+    }
+  }, [player, playerId, triggerLinkedAccountSearch]);
+
+  // Mock function to simulate ban search results
+  // Helper function to find punishment type for a given warning
+  const findPunishmentTypeForWarning = (warning: WarningEntry) => {
+    if (!warning.type) return null;
+    const allTypes = [
+      ...punishmentTypesByCategory.Administrative,
+      ...punishmentTypesByCategory.Social,
+      ...punishmentTypesByCategory.Gameplay
+    ];
+    return allTypes.find(type => type.name === warning.type);
+  };
+
+  // Function to handle ticket navigation
+  const handleTicketClick = (ticketId: string) => {
+    navigate(`/panel/tickets/${ticketId}`);
+  };
+
+  // Get punishment ordinal from punishment type data
+  const getPunishmentOrdinal = (punishmentName: string): number => {
+    // Search in all categories for the punishment type
+    const allTypes = [
+      ...punishmentTypesByCategory.Administrative,
+      ...punishmentTypesByCategory.Social,
+      ...punishmentTypesByCategory.Gameplay
+    ];
+    
+    const punishmentType = allTypes.find(type => type.name === punishmentName);
+    return punishmentType ? punishmentType.ordinal : -1;
+  };
+
+  // Convert duration to milliseconds
+  const durationToMilliseconds = (duration: { value: number; unit: string }) => {
+    const { value, unit } = duration;
+    
+    switch (unit) {
+      case 'seconds':
+        return value * 1000;
+      case 'minutes':
+        return value * 60 * 1000;
+      case 'hours':
+        return value * 60 * 60 * 1000;
+      case 'days':
+        return value * 24 * 60 * 60 * 1000;
+      case 'weeks':
+        return value * 7 * 24 * 60 * 60 * 1000;
+      case 'months':
+        return value * 30 * 24 * 60 * 60 * 1000; // Approximate month
+      default:
+        return 0;
+    }
+  };
+
+  // Handler for applying punishment
+  const handleApplyPunishment = async () => {
+    if (!playerInfo.selectedPunishmentCategory) {
+      toast({
+        title: t('player.missingInfo'),
+        description: t('player.selectPunishmentType'),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      setIsApplyingPunishment(true);
+      
+      // Get the punishment type ordinal
+      const typeOrdinal = getPunishmentOrdinal(playerInfo.selectedPunishmentCategory);
+      if (typeOrdinal === -1) {
+        throw new Error(`Unknown punishment type: ${playerInfo.selectedPunishmentCategory}`);
+      }
+      
+      // Determine severity and status based on punishment type
+      let severity = null;
+      let status = null;
+      const data: { [key: string]: unknown } = { issuedServer: 'Panel' };
+
+      // For non-administrative punishments that use severity/status
+      if (!['Kick', 'Manual Mute', 'Manual Ban', 'Security Ban', 'Linked Ban', 'Blacklist'].includes(playerInfo.selectedPunishmentCategory)) {
+        if (playerInfo.selectedSeverity) {
+          severity = playerInfo.selectedSeverity;
+        }
+        if (playerInfo.selectedOffenseLevel) {
+          status = playerInfo.selectedOffenseLevel;
+        }
+      }
+      
+      // Handle duration for manual punishments
+      if (['Manual Mute', 'Manual Ban'].includes(playerInfo.selectedPunishmentCategory)) {
+        if (playerInfo.isPermanent) {
+          data.duration = -1; // Permanent
+        } else if (playerInfo.duration) {
+          data.duration = durationToMilliseconds(playerInfo.duration);
+        }
+      }
+      
+      // Add other data fields
+      if (playerInfo.altBlocking) data.altBlocking = true;
+      if (playerInfo.statWiping) data.wipeAfterExpiry = true;
+      if (playerInfo.banLinkedAccounts) data.banLinkedAccounts = true;
+      if (playerInfo.wipeAccountAfterExpiry) data.wipeAfterExpiry = true;
+      if (playerInfo.kickSameIP) data.kickSameIP = true;
+      if (playerInfo.silentPunishment) data.silent = true;
+
+      if (playerInfo.banToLink?.trim()) {
+        // Extract ban ID from the format "ban-123 (PlayerName)"
+        const banIdMatch = playerInfo.banToLink.match(/^(ban-\w+)/);
+        if (banIdMatch) {
+          data.linkedBanId = banIdMatch[1];
+        }
+      }
+
+      // Set severity and status in data as well
+      if (severity) data.severity = severity;
+      if (status) data.status = status;
+      
+      // Prepare notes array
+      const notes: Array<{text: string; issuerName: string; date?: string}> = [];
+
+      // Add staff notes as additional notes
+      if (playerInfo.staffNotes?.trim()) {
+        notes.push({
+          text: playerInfo.staffNotes.trim(),
+          issuerName: user?.username || 'Admin'
+        });
+      }
+      
+      // Prepare attached ticket IDs
+      const attachedTicketIds: string[] = [];
+      if (playerInfo.attachedReports) {
+        playerInfo.attachedReports.forEach(report => {
+          if (report && report !== 'ticket-new') {
+            // Extract ticket ID from format like "ticket-123" or use raw ID
+            const ticketMatch = report.match(/ticket-(\w+)/);
+            if (ticketMatch && ticketMatch[1]) {
+              attachedTicketIds.push(ticketMatch[1]);
+            } else if (report.trim()) {
+              attachedTicketIds.push(report.trim());
+            }
+          }
+        });
+      }
+      
+      // Prepare evidence array - handle both string and object formats like PlayerWindow
+      const evidence = playerInfo.evidenceList?.filter((e: string) => e.trim()).map((e: string) => {
+        const trimmedEvidence = e.trim();
+
+        if (trimmedEvidence.startsWith('{')) {
+          try {
+            const fileData = JSON.parse(trimmedEvidence);
+            return {
+              text: fileData.fileName,
+              issuerName: user?.username || 'Admin',
+              date: new Date().toISOString(),
+              type: 'file',
+              fileUrl: fileData.url,
+              fileName: fileData.fileName,
+              fileType: fileData.fileType,
+              fileSize: fileData.fileSize
+            };
+          } catch (error) {
+            console.warn('Failed to parse evidence JSON:', error);
+            // Fallback to text evidence
+            return {
+              text: trimmedEvidence,
+              issuerName: user?.username || 'Admin',
+              date: new Date().toISOString(),
+              type: 'text'
+            };
+          }
+        }
+        else if (trimmedEvidence.startsWith('http')) {
+          return {
+            text: trimmedEvidence,
+            issuerName: user?.username || 'Admin',
+            date: new Date().toISOString(),
+            type: 'url'
+          };
+        } else {
+          // Text evidence - convert to object format
+          return {
+            text: trimmedEvidence,
+            issuerName: user?.username || 'Admin',
+            date: new Date().toISOString(),
+            type: 'text'
+          };
+        }
+      }) || [];
+      
+      // Prepare punishment data in the format expected by the server
+      const punishmentData: Record<string, unknown> = {
+        issuerName: user?.username || 'Admin',
+        issuerId: user?.id,
+        typeOrdinal: typeOrdinal,
+        reason: playerFacingReason(playerInfo.selectedPunishmentCategory, playerInfo.reason),
+        notes: notes,
+        evidence: evidence,
+        attachedTicketIds: attachedTicketIds,
+        severity: severity,
+        status: status,
+        data: data
+      };
+      
+      // Call the API
+      await applyPunishment.mutateAsync({
+        uuid: playerId,
+        punishmentData
+      });
+      
+      // Refetch player data
+      refetch();
+      
+      // Show success message
+      toast({
+        title: t('player.punishmentApplied'),
+        description: t('player.punishmentAppliedDesc', { type: playerInfo.selectedPunishmentCategory, username: playerInfo.username })
+      });
+      
+      // Reset the punishment form
+      setPlayerInfo(prev => ({
+        ...prev,
+        selectedPunishmentCategory: undefined,
+        selectedSeverity: undefined,
+        selectedOffenseLevel: undefined,
+        duration: undefined,
+        isPermanent: false,
+        reason: '',
+        evidence: '',
+        evidenceList: [],
+        attachedReports: [],
+        banLinkedAccounts: false,
+        wipeAccountAfterExpiry: false,
+        kickSameIP: false,
+        banToLink: '',
+        staffNotes: '',
+        silentPunishment: false,
+        altBlocking: false,
+        statWiping: false
+      }));
+      
+    } catch (error) {
+      console.error('Error applying punishment:', error);
+      toast({
+        title: t('player.punishmentFailed'),
+        description: error instanceof Error ? error.message : t('player.unknownError'),
+        variant: "destructive"
+      });
+    } finally {
+      setIsApplyingPunishment(false);
+    }
+  };
+
+  if (isLoading || isLoadingSettings) {
+    return (
+      <div className="w-full px-4 py-4 pb-20">
+        <div className="flex items-center mb-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate('/panel/lookup')}
+            className="mr-2"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <Skeleton className="h-8 w-48" />
+        </div>
+        <div className="flex items-center gap-4 mb-6">
+          <Skeleton className="h-16 w-16 rounded-full" />
+          <div className="space-y-2">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+        </div>
+        <div className="space-y-4">
+          <Skeleton className="h-10 w-full max-w-md" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Skeleton className="h-32 w-full" />
+            <Skeleton className="h-32 w-full" />
+          </div>
+          <Skeleton className="h-48 w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error || !player) {
+    return (
+      <div className="w-full px-4 py-4 pb-20">
+        <div className="flex items-center mb-4">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={() => navigate('/panel/lookup')}
+            className="mr-2"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-2xl font-bold">{t('player.notFound')}</h1>
+        </div>
+        <div className="flex flex-col items-center justify-center h-64">
+          <p className="text-destructive">{t('player.notFoundDesc')}</p>
+          <Button onClick={() => navigate("/panel/lookup")} className="mt-4">{t('player.returnToLookup')}</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full px-4 py-4 pb-20">
+      <div className="flex items-center mb-4">
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          onClick={() => navigate('/panel/lookup')}
+          className="mr-2"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <h1 className="text-2xl font-bold">{t('player.details')}</h1>
+      </div>
+
+      <div className="space-y-4">
+        <div className="pt-2">
+          <div className="bg-background-lighter p-4 rounded-lg">
+            <div className="flex items-start gap-4">
+              <div className="relative h-16 w-16 bg-muted rounded-lg flex items-center justify-center overflow-hidden">
+                {playerId && !avatarError ? (
+                  <>
+                    <img 
+                      src={getAvatarUrl(playerId, 64, true)}
+                      alt={`${playerInfo.username || 'Player'} Avatar`}
+                      className={`w-full h-full object-cover transition-opacity duration-200 ${avatarLoading ? 'opacity-0' : 'opacity-100'}`}
+                      onError={() => {
+                        setAvatarError(true);
+                        setAvatarLoading(false);
+                      }}
+                      onLoad={() => {
+                        setAvatarError(false);
+                        setAvatarLoading(false);
+                      }}
+                    />
+                    {avatarLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-2xl font-bold text-primary">{playerInfo.username?.substring(0, 2) || '??'}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-2xl font-bold text-primary">{playerInfo.username?.substring(0, 2) || '??'}</span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h5 className="text-lg font-medium">{playerInfo.username || 'Unknown'}</h5>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  <Badge variant="outline" className={playerInfo.status === 'Online' ? 
+                    "bg-success/10 text-success border-success/20" : 
+                    "bg-muted/50 text-muted-foreground border-muted/30"
+                  }>
+                    {playerInfo.status === 'Online' ?
+                      t('player.online') :
+                      t('player.offline')
+                    }
+                  </Badge>
+                  <Badge variant="outline" className={
+                    playerInfo.social.toLowerCase() === 'low' ? 
+                      "bg-success/10 text-success border-success/20" : 
+                    playerInfo.social.toLowerCase() === 'medium' ? 
+                      "bg-warning/10 text-warning border-warning/20" : 
+                      "bg-destructive/10 text-destructive border-destructive/20"
+                  }>
+                    {t('player.social')}: {playerInfo.social.toLowerCase()}
+                  </Badge>
+                  <Badge variant="outline" className={
+                    playerInfo.gameplay.toLowerCase() === 'low' ? 
+                      "bg-success/10 text-success border-success/20" : 
+                    playerInfo.gameplay.toLowerCase() === 'medium' ? 
+                      "bg-warning/10 text-warning border-warning/20" : 
+                      "bg-destructive/10 text-destructive border-destructive/20"
+                  }>
+                    {t('player.gameplay')}: {playerInfo.gameplay.toLowerCase()}
+                  </Badge>
+                  {playerInfo.punishmentStatus && (
+                    <Badge variant="outline" className={
+                      playerInfo.punishmentStatus === 'banned'
+                        ? "bg-destructive/10 text-destructive border-destructive/20"
+                        : "bg-warning/10 text-warning border-warning/20"
+                    }>
+                      {playerInfo.punishmentStatus === 'banned' ? t('player.currentlyBanned') : t('player.currentlyMuted')}
+                    </Badge>
+                  )}
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 mt-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">{t('player.region')}:</span>
+                    <span className="ml-1">{playerInfo.region}</span>
+                    {playerInfo.region && playerInfo.region !== 'Unknown' && (
+                      <span className="text-xs text-muted-foreground ml-1">{t('player.fromLatestIp')}</span>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">{t('player.country')}:</span>
+                    <span className="ml-1">{playerInfo.country}</span>
+                    {playerInfo.country && playerInfo.country !== 'Unknown' && (
+                      <span className="text-xs text-muted-foreground ml-1">{t('player.fromLatestIp')}</span>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">{t('player.firstJoin')}:</span>
+                    <span className="ml-1">{playerInfo.firstJoined}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">{t('player.lastJoin')}:</span>
+                    <span className="ml-1">{playerInfo.lastOnline}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">{t('player.playtime')}:</span>
+                    <span className="ml-1">{playerInfo.playtime}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">{playerInfo.status === 'Online' ? t('player.currentServer') : t('player.lastServer')}:</span>
+                    <span className="ml-1">{playerInfo.lastServer}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <Tabs value={activeTab} className="w-full" onValueChange={setActiveTab}>
+          {isMobile ? (
+            <Select value={activeTab} onValueChange={setActiveTab}>
+              <SelectTrigger className="w-full mb-3">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="history">{t('player.tabHistory')}</SelectItem>
+                <SelectItem value="linked">{t('player.tabConnected')}</SelectItem>
+                <SelectItem value="notes">{t('player.tabNotes')}</SelectItem>
+                <SelectItem value="tickets">{t('player.tabTickets')}</SelectItem>
+                <SelectItem value="replays">{t('player.tabReplays')}</SelectItem>
+                <SelectItem value="names">{t('player.tabNames')}</SelectItem>
+                <SelectItem value="punishment">{t('player.tabPunish')}</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <TabsList className="grid grid-cols-7 gap-1 px-1">
+              <TabsTrigger value="history" className="text-xs py-2">
+                <History className="h-3.5 w-3.5 mr-1.5" />
+                {t('player.tabHistory')}
+              </TabsTrigger>
+              <TabsTrigger value="linked" className="text-xs py-2">
+                <Link2 className="h-3.5 w-3.5 mr-1.5 flex-shrink-0" />
+                {t('player.tabConnectedShort')}
+              </TabsTrigger>
+              <TabsTrigger value="notes" className="text-xs py-2">
+                <StickyNote className="h-3.5 w-3.5 mr-1.5" />
+                {t('player.tabNotes')}
+              </TabsTrigger>
+              <TabsTrigger value="tickets" className="text-xs py-2">
+                <Ticket className="h-3.5 w-3.5 mr-1.5" />
+                {t('player.tabTickets')}
+              </TabsTrigger>
+              <TabsTrigger value="replays" className="text-xs py-2">
+                <Play className="h-3.5 w-3.5 mr-1.5" />
+                {t('player.tabReplays')}
+              </TabsTrigger>
+              <TabsTrigger value="names" className="text-xs py-2">
+                <UserRound className="h-3.5 w-3.5 mr-1.5" />
+                {t('player.tabNames')}
+              </TabsTrigger>
+              <TabsTrigger value="punishment" className="text-xs py-2">
+                <Shield className="h-3.5 w-3.5 mr-1.5" />
+                {t('player.tabPunish')}
+              </TabsTrigger>
+            </TabsList>
+          )}
+          
+          <TabsContent value="history" className="space-y-2 mx-1 mt-3">
+            <h4 className="font-medium">{t('player.historyTitle')}</h4>
+            <div className="space-y-2">
+              {playerInfo.warnings.length > 0 ? playerInfo.warnings.map((warning, index) => {
+                const isExpanded = expandedPunishments.has(warning.id || `warning-${index}`);
+                const isPunishment = warning.id && (
+                  warning.severity || 
+                  warning.status || 
+                  warning.evidence?.length || 
+                  warning.notes?.length ||
+                  warning.type === 'Linked Ban' ||
+                  (warning.type && ['Kick', 'Manual Mute', 'Manual Ban', 'Security Ban', 'Blacklist'].includes(warning.type))
+                );
+                
+                // Calculate effective status and expiry based on modifications
+                const effectiveState = getEffectivePunishmentState(warning);
+                
+                return (
+                  <div 
+                    key={warning.id || `warning-${index}`} 
+                    data-punishment-id={warning.id}
+                    className={`${
+                      isPunishmentCurrentlyActive(warning, effectiveState) ? 'bg-muted/30 border-l-4 border-red-500' : 
+                      'bg-muted/30'
+                    } p-3 rounded-lg transition-all duration-300`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          {isPunishment && (
+                            <PunishmentStatusBadge status={derivePunishmentStatusFromState(warning, effectiveState)} />
+                          )}
+                          <Badge variant="outline" className="bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600">
+                            {warning.type}
+                          </Badge>
+                          {warning.altBlocking && (
+                            <Badge variant="outline" className="text-xs bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 border-orange-200 dark:border-orange-700">
+                              Alt-blocking
+                            </Badge>
+                          )}
+                          {isValidBadgeValue(warning.severity) && (
+                            <Badge variant="outline" className={`text-xs ${
+                              (warning.severity && warning.severity.toLowerCase() === 'low') || (warning.severity && warning.severity.toLowerCase() === 'lenient') ?
+                                'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border-green-300 dark:border-green-700' :
+                              (warning.severity && warning.severity.toLowerCase() === 'regular') || (warning.severity && warning.severity.toLowerCase() === 'medium') ?
+                                'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 border-orange-300 dark:border-orange-700' :
+                                'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 border-red-300 dark:border-red-700'
+                            }`}>
+                              {warning.severity}
+                            </Badge>
+                          )}
+                          {isValidBadgeValue(warning.status) &&
+                           !['active', 'inactive', 'unstarted', 'pardoned'].includes(warning.status?.toLowerCase?.() || '') && (
+                            <Badge variant="outline" className={`text-xs ${
+                              (warning.status && warning.status.toLowerCase() === 'low') || (warning.status && warning.status.toLowerCase() === 'first') ?
+                                'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border-green-300 dark:border-green-700' :
+                              warning.status && warning.status.toLowerCase() === 'medium' ?
+                                'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 border-orange-300 dark:border-orange-700' :
+                                'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 border-red-300 dark:border-red-700'
+                            }`}>
+                              {warning.status}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-sm mt-1 space-y-1">
+                          <p>{warning.reason}</p>
+                          
+                          {/* Show expiry/duration information */}
+                          <div className="text-xs text-muted-foreground">
+                            {warning.date} by {warning.by}
+                            {warning.expires && (
+                              <span className="ml-2">
+                                • Expires: {formatDateWithTime(warning.expires)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Expand/Collapse button for punishments with additional details */}
+                      {isPunishment && (warning.evidence?.length || warning.notes?.length || warning.attachedTicketIds?.length || effectiveState.hasModifications) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="p-1 h-6 w-6"
+                          onClick={() => {
+                            const id = warning.id || `warning-${index}`;
+                            setExpandedPunishments(prev => {
+                              const newSet = new Set(prev);
+                              if (newSet.has(id)) {
+                                newSet.delete(id);
+                              } else {
+                                newSet.add(id);
+                              }
+                              return newSet;
+                            });
+                          }}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                    
+                    {/* Expanded details */}
+                    {isExpanded && isPunishment && (
+                      <div className="mt-3 pt-3 border-t border-border/30 space-y-3">
+                        <EvidenceList evidence={warning.evidence as unknown as EvidenceValue[]} />
+                        
+                        {/* Staff Notes */}
+                        {warning.notes && warning.notes.length > 0 && (
+                          <div>
+                            <p className="text-xs font-medium text-muted-foreground mb-1">Staff Notes:</p>
+                            <ul className="text-xs space-y-1">
+                              {warning.notes.map((note, idx) => {
+                                // For manual punishments, skip the first note as it's displayed as the reason
+                                const isManualPunishment = requiresPlayerFacingReason(warning.type);
+                                if (isManualPunishment && idx === 0) {
+                                  return null; // Skip first note for manual punishments
+                                }
+                                
+                                const noteText = typeof note === 'string' ? note : note.text;
+                                const noteIssuer = typeof note === 'string' ? 'Unknown' : note.issuerName;
+                                const noteDate = typeof note === 'string' ? 'Unknown' : formatDateWithTime(note.date);
+                                
+                                return (
+                                  <li key={idx} className="bg-muted/20 p-2 rounded text-xs">
+                                    <p className="mb-1">{noteText}</p>
+                                    <p className="text-muted-foreground text-xs">
+                                      By: {noteIssuer} on {noteDate}
+                                    </p>
+                                  </li>
+                                );
+                              }).filter(Boolean)}
+                            </ul>
+                          </div>
+                        )}
+                        
+                        {/* Attached Tickets */}
+                        {warning.attachedTicketIds && warning.attachedTicketIds.length > 0 && (
+                          <div>
+                            <p className="text-xs font-medium text-muted-foreground mb-1">Attached Tickets:</p>
+                            <div className="flex flex-wrap gap-1">
+                              {warning.attachedTicketIds.map((ticketId, idx) => (
+                                <Button
+                                  key={idx}
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-6 px-2 text-xs"
+                                  onClick={() => {
+                                    // Navigate to ticket detail page
+                                    const urlSafeTicketId = ticketId.replace('#', 'ID-');
+                                    navigate(`/panel/tickets/${urlSafeTicketId}`);
+                                  }}
+                                >
+                                  <Ticket className="h-3 w-3 mr-1" />
+                                  {ticketId}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Modification History */}
+                        {effectiveState.hasModifications && (
+                          <div>
+                            <p className="text-xs font-medium text-muted-foreground mb-1">Modification History:</p>
+                            <div className="space-y-1">
+                              {effectiveState.modifications.map((mod, idx) => (
+                                <div key={idx} className="bg-muted/20 p-2 rounded text-xs border-l-2 border-blue-500">
+                                  <div className="flex justify-between items-start mb-1">
+                                    <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-700 border-blue-500/30">
+                                      {mod.type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (l: string) => l.toUpperCase())}
+                                    </Badge>
+                                    <span className="text-muted-foreground text-xs">
+                                      {formatDateWithTime(mod.date)}
+                                    </span>
+                                  </div>
+                                  {mod.reason && (
+                                    <p className="mb-1">{mod.reason}</p>
+                                  )}
+                                  {mod.effectiveDuration !== undefined && (
+                                    <p className="text-muted-foreground">
+                                      New duration: {(mod.effectiveDuration === 0 || mod.effectiveDuration === -1 || mod.effectiveDuration < 0) ? 'Permanent' : formatDuration(mod.effectiveDuration)}
+                                    </p>
+                                  )}
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-muted-foreground text-xs">
+                                      By: {mod.issuerName}
+                                    </p>
+                                    {mod.appealTicketId && (mod.type?.includes('APPEAL')) && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-6 px-2 text-xs"
+                                        onClick={() => navigate(`/panel/tickets/${mod.appealTicketId}`)}
+                                      >
+                                        <Link2 className="h-3 w-3 mr-1" />
+                                        View Appeal
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Linked Bans Display */}
+                        {Boolean(warning.altBlocking) && warning.id && (
+                          <LinkedBansDisplayDetail punishmentId={warning.id} onPlayerClick={(uuid: string) => {
+                            navigate(`/panel/player/${uuid}`);
+                          }} />
+                        )}
+
+                        {/* Action buttons - only show for punishments with IDs */}
+                        {warning.id && (
+                          <div className="flex gap-2 pt-2 border-t border-border/30">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs h-7"
+                              onClick={() => {
+                                const id = warning.id || `warning-${index}`;
+                                setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isAddingPunishmentNote: true,
+                                  punishmentNoteTarget: id,
+                                  newPunishmentNote: ''
+                                }));
+                              }}
+                            >
+                              <StickyNote className="h-3 w-3 mr-1" />
+                              Add Note
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs h-7"
+                              onClick={() => {
+                                const id = warning.id || `warning-${index}`;
+                                setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isAddingPunishmentEvidence: true,
+                                  punishmentEvidenceTarget: id,
+                                  newPunishmentEvidence: ''
+                                }));
+                              }}
+                            >
+                              <FileText className="h-3 w-3 mr-1" />
+                              Add Evidence
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs h-7"
+                              onClick={() => {
+                                const id = warning.id || `warning-${index}`;
+                                setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isModifyingPunishment: true,
+                                  modifyPunishmentTarget: id,
+                                  modifyPunishmentAction: 'modify'
+                                }));
+                              }}
+                            >
+                              <Settings className="h-3 w-3 mr-1" />
+                              Modify
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs h-7"
+                              onClick={() => {
+                                const id = warning.id || `warning-${index}`;
+                                setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isModifyingTickets: true,
+                                  modifyTicketsTarget: id,
+                                  modifyTicketsAssociated: true,
+                                  modifyTicketsAdd: [],
+                                  modifyTicketsRemove: [],
+                                }));
+                              }}
+                            >
+                              <Ticket className="h-3 w-3 mr-1" />
+                              Tickets
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Add Note Form */}
+                        {warning.id && playerInfo.isAddingPunishmentNote && playerInfo.punishmentNoteTarget === (warning.id || `warning-${index}`) && (
+                          <div className="mt-3 p-3 bg-muted/20 rounded-lg border">
+                            <p className="text-xs font-medium mb-2">Add Note to Punishment</p>
+                            <textarea
+                              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm h-16 resize-none"
+                              placeholder="Enter your note here..."
+                              value={playerInfo.newPunishmentNote || ''}
+                              onChange={(e) => setPlayerInfo(prev => ({...prev, newPunishmentNote: e.target.value}))}
+                            />
+                            <div className="flex justify-end gap-2 mt-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isAddingPunishmentNote: false,
+                                  punishmentNoteTarget: null,
+                                  newPunishmentNote: ''
+                                }))}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={!playerInfo.newPunishmentNote?.trim()}
+                                onClick={async () => {
+                                  if (!playerInfo.newPunishmentNote?.trim()) return;
+                                  
+                                  try {
+                                    await addPunishmentNote.mutateAsync({
+                                      uuid: playerId,
+                                      punishmentId: warning.id!,
+                                      noteText: playerInfo.newPunishmentNote
+                                    });
+                                    
+                                    toast({
+                                      title: "Note added",
+                                      description: "Punishment note has been added successfully"
+                                    });
+                                    
+                                    // Reset form and refetch
+                                    setPlayerInfo(prev => ({
+                                      ...prev,
+                                      isAddingPunishmentNote: false,
+                                      punishmentNoteTarget: null,
+                                      newPunishmentNote: ''
+                                    }));
+                                    
+                                    refetch();
+                                  } catch (error) {
+                                    toast({
+                                      title: "Failed to add note",
+                                      description: error instanceof Error ? error.message : "An error occurred",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }}
+                              >
+                                Add Note
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Add Evidence Form */}
+                        {warning.id && playerInfo.isAddingPunishmentEvidence && playerInfo.punishmentEvidenceTarget === (warning.id || `warning-${index}`) && (
+                          <div className="mt-3 p-3 bg-muted/20 rounded-lg border">
+                            <p className="text-xs font-medium mb-2">Add Evidence to Punishment</p>
+                            <div className="flex items-center space-x-2">
+                              <textarea
+                                className={`flex-1 rounded-md border border-border px-3 py-2 text-sm h-10 resize-none ${
+                                  playerInfo.uploadedEvidenceFile ? 'bg-muted text-muted-foreground' : 'bg-background'
+                                }`}
+                                placeholder="Enter evidence URL or description..."
+                                value={playerInfo.uploadedEvidenceFile ? `📁 ${playerInfo.uploadedEvidenceFile.fileName}` : (playerInfo.newPunishmentEvidence || '')}
+                                onChange={(e) => {
+                                  if (playerInfo.uploadedEvidenceFile) return; // Don't allow editing if file uploaded
+                                  setPlayerInfo(prev => ({...prev, newPunishmentEvidence: e.target.value}));
+                                }}
+                                readOnly={!!playerInfo.uploadedEvidenceFile}
+                              />
+                              
+                              <MediaUpload
+                                uploadType="evidence"
+                                onUploadComplete={(result, file) => {
+                                  setPlayerInfo(prev => ({
+                                    ...prev,
+                                    uploadedEvidenceFile: {
+                                      url: result.url,
+                                      fileName: file?.name || 'Unknown file',
+                                      fileType: file?.type || 'application/octet-stream',
+                                      fileSize: file?.size || 0
+                                    }
+                                  }));
+                                }}
+                                metadata={{
+                                  playerId: playerId,
+                                  category: 'punishment'
+                                }}
+                                variant="button-only"
+                                maxFiles={1}
+                              />
+                            </div>
+                            <div className="flex justify-end gap-2 mt-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isAddingPunishmentEvidence: false,
+                                  punishmentEvidenceTarget: null,
+                                  newPunishmentEvidence: '',
+                                  uploadedEvidenceFile: null
+                                }))}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={!playerInfo.newPunishmentEvidence?.trim() && !playerInfo.uploadedEvidenceFile}
+                                onClick={async () => {
+                                  if (!playerInfo.newPunishmentEvidence?.trim() && !playerInfo.uploadedEvidenceFile) return;
+                                  
+                                  try {
+                                    // Prepare evidence data based on whether it's a file or text
+                                    let evidenceData: Record<string, unknown>;
+
+                                    if (playerInfo.uploadedEvidenceFile) {
+                                      evidenceData = {
+                                        text: playerInfo.uploadedEvidenceFile.fileName,
+                                        issuerName: user?.username || 'Admin',
+                                        issuerId: user?.id,
+                                        type: 'file',
+                                        url: playerInfo.uploadedEvidenceFile.url,
+                                        fileName: playerInfo.uploadedEvidenceFile.fileName,
+                                        fileType: playerInfo.uploadedEvidenceFile.fileType,
+                                        fileSize: playerInfo.uploadedEvidenceFile.fileSize
+                                      };
+                                    } else {
+                                      const trimmedEvidence = playerInfo.newPunishmentEvidence?.trim() ?? '';
+                                      const isUrl = /^https?:\/\//.test(trimmedEvidence);
+                                      evidenceData = {
+                                        text: trimmedEvidence,
+                                        issuerName: user?.username || 'Admin',
+                                        issuerId: user?.id,
+                                        type: isUrl ? 'url' : 'text',
+                                        url: isUrl ? trimmedEvidence : null
+                                      };
+                                    }
+                                    
+                                    const csrfFetch = apiFetch;
+                                    const response = await csrfFetch(`/v1/panel/players/${playerId}/punishments/${warning.id}/evidence`, {
+                                      method: 'POST',
+                                      headers: {
+                                        'Content-Type': 'application/json',
+                                      },
+                                      body: JSON.stringify(evidenceData)
+                                    });
+                                    
+                                    if (!response.ok) {
+                                      throw new Error('Failed to add evidence');
+                                    }
+                                    
+                                    toast({
+                                      title: "Evidence added",
+                                      description: "Evidence has been added to the punishment successfully"
+                                    });
+                                    
+                                    // Reset form and refetch data
+                                    setPlayerInfo(prev => ({
+                                      ...prev,
+                                      isAddingPunishmentEvidence: false,
+                                      punishmentEvidenceTarget: null,
+                                      newPunishmentEvidence: '',
+                                      uploadedEvidenceFile: null
+                                    }));
+                                    
+                                    refetch();
+                                  } catch (error) {
+                                    console.error('Error adding evidence to punishment:', error);
+                                    toast({
+                                      title: "Failed to add evidence",
+                                      description: error instanceof Error ? error.message : "An unknown error occurred",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }}
+                              >
+                                Add Evidence
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Modify Punishment Form */}
+                        {warning.id && playerInfo.isModifyingPunishment && playerInfo.modifyPunishmentTarget === (warning.id || `warning-${index}`) && (
+                          <div className="mt-3 p-3 bg-muted/20 rounded-lg border">
+                            <p className="text-xs font-medium mb-2">Modify Punishment</p>
+                            
+                            <div className="space-y-2 mb-3">
+                              <div>
+                                <label className="text-xs text-muted-foreground">Modification Type</label>
+                                <select
+                                  className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
+                                  value={playerInfo.selectedModificationType || ''}
+                                  onChange={(e) => setPlayerInfo(prev => ({
+                                    ...prev,
+                                    selectedModificationType: e.target.value as PlayerInfo['selectedModificationType']
+                                  }))}
+                                >
+                                  <option value="">Select modification type...</option>
+                                  <option value="MANUAL_DURATION_CHANGE">Change Duration</option>
+                                  <option value="MANUAL_PARDON">Pardon</option>
+                                  {(() => {
+                                    const punishmentType = findPunishmentTypeForWarning(warning);
+                                    const options = [];
+
+                                    if (punishmentType?.canBeAltBlocking) {
+                                      const currentAltBlocking = warning.altBlocking;
+                                      if (!currentAltBlocking) {
+                                        options.push(<option key="alt-true" value="SET_ALT_BLOCKING_TRUE">Enable Alt Blocking</option>);
+                                      } else {
+                                        options.push(<option key="alt-false" value="SET_ALT_BLOCKING_FALSE">Disable Alt Blocking</option>);
+                                      }
+                                    }
+
+                                    if (punishmentType?.canBeStatWiping) {
+                                      const currentStatWiping = warning.statWiping ?? false;
+                                      if (!currentStatWiping) {
+                                        options.push(<option key="wipe-true" value="SET_WIPING_TRUE">Enable Wiping</option>);
+                                      } else {
+                                        options.push(<option key="wipe-false" value="SET_WIPING_FALSE">Disable Wiping</option>);
+                                      }
+                                    }
+
+                                    return options;
+                                  })()}
+                                </select>
+                              </div>
+                              
+                              {playerInfo.selectedModificationType === 'MANUAL_DURATION_CHANGE' && (
+                                <div>
+                                  <label className="text-xs font-medium text-muted-foreground mb-1 block">New Duration</label>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input 
+                                      type="number" 
+                                      placeholder="Duration" 
+                                      className="rounded-md border border-border bg-background px-3 py-1.5 text-sm"
+                                      value={playerInfo.newDuration?.value || ''}
+                                      onChange={(e) => setPlayerInfo(prev => ({
+                                        ...prev, 
+                                        newDuration: {
+                                          value: parseInt(e.target.value) || 0,
+                                          unit: prev.newDuration?.unit || 'hours'
+                                        }
+                                      }))}
+                                      min={1}
+                                    />
+                                    <select 
+                                      className="rounded-md border border-border bg-background px-3 py-1.5 text-sm"
+                                      value={playerInfo.newDuration?.unit || 'hours'}
+                                      onChange={(e) => setPlayerInfo(prev => ({
+                                        ...prev, 
+                                        newDuration: {
+                                          value: prev.newDuration?.value || 1,
+                                          unit: e.target.value as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months'
+                                        }
+                                      }))}
+                                    >
+                                      <option value="seconds">Seconds</option>
+                                      <option value="minutes">Minutes</option>
+                                      <option value="hours">Hours</option>
+                                      <option value="days">Days</option>
+                                      <option value="weeks">Weeks</option>
+                                      <option value="months">Months</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              )}
+                              
+                              <div>
+                                <label className="text-xs font-medium text-muted-foreground mb-1 block">Reason</label>
+                                <textarea
+                                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm h-16 resize-none"
+                                  placeholder="Enter reason for modification..."
+                                  value={playerInfo.modifyPunishmentReason || ''}
+                                  onChange={(e) => setPlayerInfo(prev => ({...prev, modifyPunishmentReason: e.target.value}))}
+                                />
+                              </div>
+                            </div>
+                            
+                            <div className="flex justify-end gap-2 mt-3">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isModifyingPunishment: false,
+                                  modifyPunishmentTarget: null,
+                                  modifyPunishmentAction: null,
+                                  selectedModificationType: null,
+                                  modifyPunishmentReason: '',
+                                  newDuration: undefined
+                                }))}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={!playerInfo.selectedModificationType || !playerInfo.modifyPunishmentReason?.trim()}
+                                onClick={async () => {
+                                  if (!playerInfo.selectedModificationType || !playerInfo.modifyPunishmentReason?.trim()) return;
+                                  
+                                  try {
+                                    const modificationData: {
+                                      punishmentId: string;
+                                      modificationType: string;
+                                      reason: string;
+                                      newDuration?: { value: number; unit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months' };
+                                    } = {
+                                      punishmentId: warning.id!,
+                                      modificationType: playerInfo.selectedModificationType,
+                                      reason: playerInfo.modifyPunishmentReason
+                                    };
+                                    
+                                    if (playerInfo.selectedModificationType === 'MANUAL_DURATION_CHANGE' && playerInfo.newDuration) {
+                                      modificationData.newDuration = playerInfo.newDuration; // { value, unit }; the hook converts to ms
+                                    }
+                                    
+                                    await modifyPunishment.mutateAsync({
+                                      uuid: playerId,
+                                      ...modificationData
+                                    });
+                                    
+                                    toast({
+                                      title: "Punishment modified",
+                                      description: "Punishment has been modified successfully"
+                                    });
+                                    
+                                    // Reset form and refetch
+                                    setPlayerInfo(prev => ({
+                                      ...prev,
+                                      isModifyingPunishment: false,
+                                      modifyPunishmentTarget: null,
+                                      modifyPunishmentAction: null,
+                                      selectedModificationType: null,
+                                      modifyPunishmentReason: '',
+                                      newDuration: undefined
+                                    }));
+                                    
+                                    refetch();
+                                  } catch (error) {
+                                    toast({
+                                      title: "Failed to modify punishment",
+                                      description: error instanceof Error ? error.message : "An error occurred",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }}
+                              >
+                                Apply Modification
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Modify Tickets Form */}
+                        {warning.id && playerInfo.isModifyingTickets && playerInfo.modifyTicketsTarget === (warning.id || `warning-${index}`) && (
+                          <div className="mt-3 p-3 bg-muted/20 rounded-lg border">
+                            <p className="text-xs font-medium mb-2">Modify Linked Tickets</p>
+
+                            {/* Currently attached tickets */}
+                            <div className="mb-3">
+                              <label className="text-xs text-muted-foreground mb-1 block">Attached Tickets</label>
+                              {(() => {
+                                const currentIds = warning.attachedTicketIds || [];
+                                const pendingAdd = playerInfo.modifyTicketsAdd || [];
+                                const pendingRemove = playerInfo.modifyTicketsRemove || [];
+                                const effectiveIds = [...currentIds.filter(id => !pendingRemove.includes(id)), ...pendingAdd];
+
+                                if (effectiveIds.length === 0) {
+                                  return <p className="text-xs text-muted-foreground italic">No tickets attached</p>;
+                                }
+
+                                return (
+                                  <div className="space-y-1">
+                                    {effectiveIds.map((ticketId) => {
+                                      const ticket = ((playerTickets ?? []) as unknown as TicketView[]).find((t) => (t.id || t._id) === ticketId);
+                                      const isNewlyAdded = pendingAdd.includes(ticketId);
+                                      return (
+                                        <div key={ticketId} className={`flex items-center justify-between text-xs px-2 py-1 rounded ${isNewlyAdded ? 'bg-green-500/10 border border-green-500/20' : 'bg-muted/30'}`}>
+                                          <span className="truncate mr-2">
+                                            <Ticket className="h-3 w-3 inline mr-1" />
+                                            {ticketId.slice(-8)}
+                                            {ticket && ` - ${ticket.type || ''}`}
+                                            {ticket && (
+                                              <Badge variant="outline" className="ml-1 text-[10px] py-0 px-1">
+                                                {ticket.locked ? 'Closed' : 'Open'}
+                                              </Badge>
+                                            )}
+                                          </span>
+                                          <button
+                                            className="text-destructive hover:text-destructive/80 flex-shrink-0"
+                                            onClick={() => {
+                                              if (isNewlyAdded) {
+                                                setPlayerInfo(prev => ({
+                                                  ...prev,
+                                                  modifyTicketsAdd: (prev.modifyTicketsAdd || []).filter(id => id !== ticketId)
+                                                }));
+                                              } else {
+                                                setPlayerInfo(prev => ({
+                                                  ...prev,
+                                                  modifyTicketsRemove: [...(prev.modifyTicketsRemove || []), ticketId]
+                                                }));
+                                              }
+                                            }}
+                                          >
+                                            <X className="h-3 w-3" />
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
+                            </div>
+
+                            {/* Available tickets to add */}
+                            <div className="mb-3">
+                              <label className="text-xs text-muted-foreground mb-1 block">Add Tickets</label>
+                              {(() => {
+                                const currentIds = warning.attachedTicketIds || [];
+                                const pendingAdd = playerInfo.modifyTicketsAdd || [];
+                                const pendingRemove = playerInfo.modifyTicketsRemove || [];
+                                const effectiveIds = [...currentIds.filter(id => !pendingRemove.includes(id)), ...pendingAdd];
+                                const available = ((playerTickets ?? []) as unknown as TicketView[]).filter((t) =>
+                                  !effectiveIds.includes(t.id || t._id || '') &&
+                                  t.reportedPlayerUuid === playerId &&
+                                  !t.locked
+                                );
+
+                                if (available.length === 0) {
+                                  return <p className="text-xs text-muted-foreground italic">No open reports available for this player</p>;
+                                }
+
+                                return (
+                                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                                    {available.map((ticket) => {
+                                      const ticketId = ticket.id || ticket._id || '';
+                                      return (
+                                        <div key={ticketId} className="flex items-center justify-between text-xs px-2 py-1 rounded bg-muted/30 hover:bg-muted/50 cursor-pointer"
+                                          onClick={() => {
+                                            setPlayerInfo(prev => ({
+                                              ...prev,
+                                              modifyTicketsAdd: [...(prev.modifyTicketsAdd || []), ticketId]
+                                            }));
+                                          }}
+                                        >
+                                          <span className="truncate mr-2">
+                                            <Ticket className="h-3 w-3 inline mr-1" />
+                                            {ticketId.slice(-8)}
+                                            {` - ${ticket.type || ''}`}
+                                          </span>
+                                          <Plus className="h-3 w-3 text-green-500 flex-shrink-0" />
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
+                            </div>
+
+                            {/* Toggle for modifying associated tickets */}
+                            <label className="flex items-center gap-2 text-xs mb-3 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={playerInfo.modifyTicketsAssociated ?? true}
+                                onChange={(e) => setPlayerInfo(prev => ({...prev, modifyTicketsAssociated: e.target.checked}))}
+                                className="rounded border-border"
+                              />
+                              <span>Modify associated tickets (close added / reopen removed)</span>
+                            </label>
+
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPlayerInfo(prev => ({
+                                  ...prev,
+                                  isModifyingTickets: false,
+                                  modifyTicketsTarget: null,
+                                  modifyTicketsAdd: [],
+                                  modifyTicketsRemove: [],
+                                }))}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={
+                                  ((playerInfo.modifyTicketsAdd || []).length === 0 && (playerInfo.modifyTicketsRemove || []).length === 0) ||
+                                  modifyPunishmentTickets.isPending
+                                }
+                                onClick={async () => {
+                                  try {
+                                    await modifyPunishmentTickets.mutateAsync({
+                                      uuid: playerId,
+                                      punishmentId: warning.id!,
+                                      addTicketIds: playerInfo.modifyTicketsAdd || [],
+                                      removeTicketIds: playerInfo.modifyTicketsRemove || [],
+                                      modifyAssociatedTickets: playerInfo.modifyTicketsAssociated ?? true
+                                    });
+                                    toast({
+                                      title: 'Tickets Updated',
+                                      description: 'Punishment ticket associations have been updated'
+                                    });
+                                    refetch();
+                                    setPlayerInfo(prev => ({
+                                      ...prev,
+                                      isModifyingTickets: false,
+                                      modifyTicketsTarget: null,
+                                      modifyTicketsAdd: [],
+                                      modifyTicketsRemove: [],
+                                    }));
+                                  } catch (error) {
+                                    console.error('Error modifying punishment tickets:', error);
+                                    toast({
+                                      title: 'Failed to modify tickets',
+                                      description: error instanceof Error ? error.message : "An error occurred",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }}
+                              >
+                                {modifyPunishmentTickets.isPending ? (
+                                  <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Applying...</>
+                                ) : (
+                                  'Apply Changes'
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              }) : (
+                <div className="bg-muted/30 p-3 rounded-lg">
+                  <p className="text-sm">No moderation history found for this player.</p>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="linked" className="space-y-2 mx-1 mt-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium">Linked Accounts</h4>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setHasTriggeredLinkedSearch(false);
+                  triggerLinkedAccountSearch();
+                  refetchLinkedAccounts();
+                }}
+                disabled={findLinkedAccountsMutation.isPending || isLoadingLinkedAccounts}
+                className="text-xs h-7 px-2"
+              >
+                {findLinkedAccountsMutation.isPending || isLoadingLinkedAccounts ? (
+                  <>
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    Searching...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCcw className="h-3 w-3 mr-1" />
+                    Refresh Search
+                  </>
+                )}
+              </Button>
+            </div>
+            <div className="bg-muted/30 p-3 rounded-lg">
+              {isLoadingLinkedAccounts ? (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  <span className="text-sm text-muted-foreground">Loading linked accounts...</span>
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {playerInfo.linkedAccounts && playerInfo.linkedAccounts.length > 0 ? (
+                    playerInfo.linkedAccounts.map((account, idx) => (
+                      <li key={idx} className="text-sm flex items-center justify-between">
+                        <div className="flex items-center">
+                          <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                          <span className="font-medium">{account.username}</span>
+                          {account.statusText && (
+                            <span className="text-muted-foreground ml-1">{account.statusText}</span>
+                          )}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs h-6 px-2"
+                          onClick={() => {
+                            // Navigate to the linked account's player page using UUID
+                            const uuid = account.uuid;
+                            if (uuid) {
+                              navigate(`/panel/player/${uuid}`);
+                            } else {
+                              console.warn('No UUID found for linked account:', account);
+                              toast({
+                                title: "Navigation Error",
+                                description: "Unable to navigate to linked account - no UUID found",
+                                variant: "destructive"
+                              });
+                            }
+                          }}
+                          disabled={!account.uuid}
+                        >
+                          <Search className="h-3 w-3 mr-1" />
+                          View
+                        </Button>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground text-center py-2">
+                      {findLinkedAccountsMutation.isPending ? 
+                        'Searching for linked accounts...' : 
+                        'No linked accounts found.'
+                      }
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="notes" className="space-y-2 mx-1 mt-3">
+            <h4 className="font-medium">Staff Notes</h4>
+            <div className="bg-muted/30 p-3 rounded-lg">
+              <ul className="space-y-2">
+                {(playerInfo.notes || []).length > 0 ? (
+                  (playerInfo.notes || []).map((note, idx) => (
+                    <li key={idx} className="text-sm flex items-start">
+                      <StickyNote className="h-3.5 w-3.5 mr-2 mt-0.5 text-muted-foreground" />
+                      <span>{note}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-sm text-muted-foreground">No staff notes found.</li>
+                )}
+              </ul>
+              
+              {playerInfo.isAddingNote && (
+                <div className="mt-3 border-t border-border pt-3">
+                  <textarea 
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm h-20"
+                    placeholder="Enter your note here..."
+                    value={playerInfo.newNote || ''}
+                    onChange={(e) => setPlayerInfo(prev => ({...prev, newNote: e.target.value}))}
+                  ></textarea>
+                  <div className="flex justify-end mt-2 gap-2">
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => setPlayerInfo(prev => ({
+                        ...prev, 
+                        isAddingNote: false,
+                        newNote: ''
+                      }))}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!playerInfo.newNote?.trim()}
+                      onClick={async () => {
+                        if (!playerInfo.newNote?.trim()) return;
+
+                        const currentDate = new Date();
+                        const formattedDate = formatDateWithTime(currentDate);
+                        const actualUsername = user?.username || 'Admin';
+                        const newNoteWithMetadata = `${playerInfo.newNote} (Added by ${actualUsername} on ${formattedDate})`;
+
+                        // Create the note in the format expected by the API
+                        const noteObject = {
+                          text: playerInfo.newNote.trim(),
+                          issuerName: actualUsername,
+                          issuerId: user?.id,
+                          date: new Date().toISOString()
+                        };
+
+                        try {
+                          // Send note to the server
+                          const csrfFetch = apiFetch;
+                          const response = await csrfFetch(`/v1/panel/players/${playerId}/notes`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(noteObject)
+                          });
+
+                          if (!response.ok) {
+                            throw new Error('Failed to add note to player');
+                          }
+
+                          // Update local state
+                          setPlayerInfo(prev => ({
+                            ...prev,
+                            notes: [...(prev.notes || []), newNoteWithMetadata],
+                            isAddingNote: false,
+                            newNote: ''
+                          }));
+
+                          // Force a refetch to get the latest data
+                          refetch();
+
+                          toast({
+                            title: "Note added",
+                            description: "Staff note has been added successfully"
+                          });
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to add note. Please try again.",
+                            variant: "destructive",
+                          });
+                        }
+                      }}
+                    >
+                      Add Note
+                    </Button>
+                  </div>
+                </div>
+              )}
+              
+              {!playerInfo.isAddingNote && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="w-full mt-3"
+                  onClick={() => setPlayerInfo(prev => ({...prev, isAddingNote: true}))}
+                >
+                  <StickyNote className="h-3.5 w-3.5 mr-1.5" />
+                  Add Note
+                </Button>
+              )}
+            </div>
+          </TabsContent>
+          
+          <TabsContent value="tickets" className="space-y-2 mx-1 mt-3">
+            <h4 className="font-medium">Player Tickets</h4>
+            <div className="space-y-2">
+              {isLoadingTickets ? (
+                <div className="bg-muted/30 p-3 rounded-lg flex items-center justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  <span className="text-sm">Loading tickets...</span>
+                </div>
+              ) : playerTickets && playerTickets.length > 0 ? (
+                (playerTickets as unknown as TicketView[]).map((ticket) => {
+                  const normalizedStatus = normalizeTicketStatus(ticket.status);
+                  const statusLabel = formatTicketStatusLabel(ticket.status);
+
+                  return (
+                    <div
+                      key={ticket.id}
+                      className="bg-muted/30 p-3 rounded-lg hover:bg-muted/40 transition-colors cursor-pointer"
+                      onClick={() => handleTicketClick(ticket.id ?? '')}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Badge variant="outline" className={`text-xs ${
+                              normalizedStatus === 'open' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border-green-300 dark:border-green-700' :
+                              normalizedStatus === 'closed' ? 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-600' :
+                              'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 border-red-300 dark:border-red-700'
+                            }`}>
+                              {statusLabel}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs bg-blue-50 dark:bg-blue-900 text-blue-900 dark:text-blue-100 border-blue-200 dark:border-blue-700">
+                              {ticket.category || ticket.type || 'General'}
+                            </Badge>
+                          </div>
+                          <div className="text-sm">
+                            <p className="font-medium">{ticket.subject || 'No subject'}</p>
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-2">
+                            Created: {ticket.created ? formatDateWithTime(ticket.created) : 'Unknown'}
+                            {(() => {
+                              const assigneeDisplay = Array.isArray(ticket.assignedTo)
+                                ? ticket.assignedTo.join(', ')
+                                : ticket.assignedTo;
+                              return assigneeDisplay ? ` • Assigned to: ${assigneeDisplay}` : '';
+                            })()}
+                          </div>
+                        </div>
+                        <div className="ml-2">
+                          <Badge variant="outline" className="text-xs">
+                            #{ticket.id?.slice(-6) || 'N/A'}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="bg-muted/30 p-3 rounded-lg">
+                  <p className="text-sm text-muted-foreground">No tickets found for this player.</p>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+          
+          <TabsContent value="replays" className="space-y-2 mx-1 mt-3">
+            <h4 className="font-medium">{t('player.playerReplays')}</h4>
+            <PlayerReplaysList playerId={playerId} />
+          </TabsContent>
+
+          <TabsContent value="names" className="space-y-2 mx-1 mt-3">
+            <h4 className="font-medium">{t('player.previousNames')}</h4>
+            <div className="bg-muted/30 p-3 rounded-lg">
+              <ul className="space-y-2">
+                {playerInfo.previousNames && playerInfo.previousNames.length > 0 ? (
+                  playerInfo.previousNames.map((name, idx) => (
+                    <li key={idx} className="text-sm flex items-center">
+                      <UserRound className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                      {name}
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-sm text-muted-foreground">{t('player.noPreviousNames')}</li>
+                )}
+              </ul>
+            </div>
+          </TabsContent>
+          
+          <TabsContent value="punishment" className="space-y-3 mx-1 mt-3">
+            <h4 className="font-medium">Create Punishment</h4>
+            <PlayerPunishment
+              playerId={playerId}
+              playerName={playerInfo.username}
+              playerStatus={playerInfo.status}
+              data={{
+                selectedPunishmentCategory: playerInfo.selectedPunishmentCategory,
+                selectedSeverity: playerInfo.selectedSeverity,
+                selectedOffenseLevel: playerInfo.selectedOffenseLevel,
+                duration: playerInfo.duration,
+                isPermanent: playerInfo.isPermanent,
+                reason: playerInfo.reason,
+                evidence: playerInfo.evidenceList || [],
+                staffNotes: playerInfo.staffNotes,
+                altBlocking: playerInfo.altBlocking,
+                statWiping: playerInfo.statWiping,
+                silentPunishment: playerInfo.silentPunishment,
+                kickSameIP: playerInfo.kickSameIP,
+                attachReports: playerInfo.attachedReports,
+                banToLink: playerInfo.banToLink,
+                banLinkedAccounts: playerInfo.banLinkedAccounts
+              }}
+              onChange={(data) => {
+                setPlayerInfo(prev => ({
+                  ...prev,
+                  selectedPunishmentCategory: data.selectedPunishmentCategory,
+                  selectedSeverity: data.selectedSeverity,
+                  selectedOffenseLevel: data.selectedOffenseLevel,
+                  duration: data.duration,
+                  isPermanent: data.isPermanent,
+                  reason: data.reason,
+                  evidenceList: data.evidence,
+                  staffNotes: data.staffNotes,
+                  altBlocking: data.altBlocking,
+                  statWiping: data.statWiping,
+                  silentPunishment: data.silentPunishment,
+                  kickSameIP: data.kickSameIP,
+                  attachedReports: data.attachReports,
+                  banToLink: data.banToLink,
+                  banLinkedAccounts: data.banLinkedAccounts
+                }));
+              }}
+              onApply={async () => {
+                // Use the existing handleApplyPunishment logic
+                await handleApplyPunishment();
+              }}
+              punishmentTypesByCategory={filteredPunishmentTypesByCategory}
+              isLoading={isApplyingPunishment || isLoadingSettings || isLoadingPunishmentTypes}
+              compact={false}
+              availableTickets={((playerTickets ?? []) as unknown as TicketView[]).map((t) => ({
+                id: t.id || t._id || '',
+                subject: t.subject || '',
+                type: t.type || t.category || '',
+                status: t.locked ? 'Closed' : 'Open',
+                locked: t.locked
+              }))}
+            />
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  );
+};
+
+export default PlayerDetailPage;

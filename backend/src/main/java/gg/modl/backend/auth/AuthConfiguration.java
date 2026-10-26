@@ -1,0 +1,26 @@
+package gg.modl.backend.auth;
+
+import jakarta.validation.constraints.Min;
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+import org.springframework.validation.annotation.Validated;
+
+@Component
+@ConfigurationProperties(prefix = "modl.auth")
+@Validated
+@Getter
+@Setter
+public class AuthConfiguration {
+    @Min(MIN_SESSION_DURATION_SECONDS)
+    private long sessionDurationSeconds = MIN_SESSION_DURATION_SECONDS;
+    private String sessionCookieName = "MODL_SESSION";
+    private String cookieDomain = "";
+    private boolean cookieSecure = true;
+    @org.springframework.beans.factory.annotation.Value("${BASE_URL:http://localhost:8080}")
+    private String baseUrl;
+    public boolean isCookieSecure() { return baseUrl == null ? cookieSecure : baseUrl.startsWith("https://"); }
+    private boolean developmentMode = false;
+    public static final long MIN_SESSION_DURATION_SECONDS = 14L * 24 * 60 * 60;
+}

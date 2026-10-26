@@ -1,0 +1,770 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@modl-gg/shared-web/components/ui/card';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@modl-gg/shared-web/components/ui/alert-dialog';
+import { queryClient } from '@/lib/queryClient';
+import { apiFetch } from '@/lib/api';
+import { useQuery, useMutation, type UseMutationResult } from '@tanstack/react-query';
+import { Plus, Edit, Trash2, GripVertical } from 'lucide-react';
+import { DndProvider, useDrag, useDrop, type DropTargetMonitor } from 'react-dnd';
+import type { Identifier } from 'dnd-core';
+import { HTML5Backend } from 'react-dnd-html5-backend';
+import ArticleListItem from './ArticleListItem';
+import MarkdownEditor from '@modl-gg/shared-web/components/ui/MarkdownEditor';
+import { type KnowledgebaseCategory, type KnowledgebaseArticle, type KnowledgebaseArticleStub } from '@modl-gg/shared-web/types';
+
+interface ArticleVisibilityInput {
+  isVisible?: boolean;
+  visible?: boolean;
+}
+
+type RawKnowledgebaseArticle = Omit<KnowledgebaseArticle, 'isVisible'> & ArticleVisibilityInput;
+
+type RawKnowledgebaseArticleStub = Omit<KnowledgebaseArticleStub, 'isVisible'> & ArticleVisibilityInput;
+
+type RawKnowledgebaseCategory = Omit<KnowledgebaseCategory, 'articles'> & {
+  articles?: RawKnowledgebaseArticleStub[];
+};
+
+const normalizeArticle = <T extends ArticleVisibilityInput>(article: T): T & { isVisible: boolean } => ({
+  ...article,
+  isVisible: article?.isVisible ?? article?.visible ?? true,
+});
+
+const normalizeCategory = (category: RawKnowledgebaseCategory): KnowledgebaseCategory => ({
+  ...category,
+  articles: Array.isArray(category?.articles)
+    ? category.articles.map(normalizeArticle)
+    : [],
+});
+
+const fetchCategories = async (): Promise<KnowledgebaseCategory[]> => {
+  const { getApiUrl } = await import('@/lib/api');
+  const response = await fetch(getApiUrl('/v1/panel/knowledgebase/categories'), {
+    credentials: 'include',
+    headers: {  }
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch categories');
+  }
+  const data = await response.json();
+  return Array.isArray(data.categories) ? data.categories.map(normalizeCategory) : [];
+};
+const ItemTypes = {
+  CATEGORY: 'category',
+  ARTICLE: 'article',
+};
+
+interface CategoryDragItem {
+  id: string;
+  originalIndex: number;
+  type: typeof ItemTypes.CATEGORY;
+}
+
+interface CategoryItemProps {
+  category: KnowledgebaseCategory;
+  index: number;
+  moveCategory: (dragIndex: number, hoverIndex: number) => void;
+  onEdit: (category: KnowledgebaseCategory) => void;
+  onDelete: (category: KnowledgebaseCategory) => void;
+  onAddArticle: (categoryId: string) => void;
+  editingCategory: KnowledgebaseCategory | null;
+  handleUpdateCategory: () => void;
+  setEditingCategory: React.Dispatch<React.SetStateAction<KnowledgebaseCategory | null>>;
+  updateCategoryMutation: UseMutationResult<KnowledgebaseCategory, Error, { id: string; name: string; description?: string }>;
+  deleteCategoryMutation: UseMutationResult<void, Error, string>;
+  handleDeleteArticle: (categoryId: string, articleId: string, title: string) => void;
+  handleDropCategory: () => void;
+  reorderArticlesMutation: UseMutationResult<void, Error, { categoryId: string; orderedArticleIds: string[] }>;
+  fetchArticleForEditing: (categoryId: string, articleId: string) => Promise<void>;
+}
+
+const CategoryItem: React.FC<CategoryItemProps> = ({
+  category,
+  index,
+  moveCategory,
+  onEdit,
+  onDelete,
+  onAddArticle,
+  editingCategory,
+  handleUpdateCategory,
+  setEditingCategory,
+  updateCategoryMutation,
+  deleteCategoryMutation,
+  handleDeleteArticle, // This is the global one
+  handleDropCategory,
+  reorderArticlesMutation,
+  fetchArticleForEditing
+}) => {
+  const { t } = useTranslation();
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [displayedCategoryArticles, setDisplayedCategoryArticles] = useState<KnowledgebaseArticleStub[]>([]);
+
+  useEffect(() => {
+    if (category.articles) {
+      // Copy before sorting: Array.prototype.sort mutates in place, and
+      // category.articles is owned by the react-query cache.
+      setDisplayedCategoryArticles([...category.articles].sort((a,b) => a.ordinal - b.ordinal));
+    }
+  }, [category.articles]);
+
+  const moveArticleInCategory = useCallback((categoryIdToUpdate: string, dragIndex: number, hoverIndex: number) => {
+    if (categoryIdToUpdate !== category.id) return; // Ensure we are in the correct category context
+    setDisplayedCategoryArticles((prevArticles) => {
+      const updatedArticles = [...prevArticles];
+      const [draggedItem] = updatedArticles.splice(dragIndex, 1);
+      if (draggedItem) {
+        updatedArticles.splice(hoverIndex, 0, draggedItem);
+      }
+      return updatedArticles;
+    });
+  }, [category.id]);
+
+  const handleDropArticleInCategory = useCallback((categoryIdToUpdate: string) => {
+    if (categoryIdToUpdate !== category.id) return;
+    const orderedArticleIds = displayedCategoryArticles.map(art => art.id);
+    reorderArticlesMutation.mutate({ categoryId: category.id, orderedArticleIds });
+  }, [category.id, displayedCategoryArticles, reorderArticlesMutation]);
+
+  const [{ handlerId }, drop] = useDrop<CategoryDragItem, void, { handlerId: Identifier | null }>({
+    accept: ItemTypes.CATEGORY,
+    collect(monitor) {
+      return {
+        handlerId: monitor.getHandlerId(),
+      };
+    },
+    hover(item: CategoryDragItem, _monitor: DropTargetMonitor) {
+      if (!ref.current) return;
+      const dragIndex = item.originalIndex;
+      const hoverIndex = index;
+      if (dragIndex === hoverIndex) return;
+      moveCategory(dragIndex, hoverIndex);
+      item.originalIndex = hoverIndex;
+    },
+  });
+
+  const [{ isDragging }, drag, preview] = useDrag({
+    type: ItemTypes.CATEGORY,
+    item: () => ({ id: category.id, originalIndex: index, type: ItemTypes.CATEGORY }),
+    collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    end: (_item, monitor) => {
+      // If the item was dropped on a compatible target (which it will be, even if it's its own spot after moving)
+      // and the drop was not cancelled, then we persist the order.
+      if (monitor.didDrop()) {
+        handleDropCategory();
+      }
+    }
+  });
+
+  drop(drag(ref));
+
+  // Extracted CategoryItem component's JSX
+  return (
+    <div ref={preview} style={{ opacity: isDragging ? 0.5 : 1 }} data-handler-id={handlerId}>
+      <Card ref={ref} className="p-4 rounded-card shadow-card-inner bg-surface-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center flex-1">
+            <GripVertical className="mr-2 h-5 w-5 text-muted-foreground cursor-grab" />
+            {editingCategory?.id === category.id ? (
+              <div className="flex-1 space-y-2">
+                <Input
+                  type="text"
+                  value={editingCategory.name}
+                  onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
+                  placeholder={t('settings.knowledgebase.categoryName')}
+                  className="h-8"
+                  autoFocus
+                />
+                <Input
+                  type="text"
+                  value={editingCategory.description || ''}
+                  onChange={(e) => setEditingCategory({ ...editingCategory, description: e.target.value })}
+                  placeholder={t('settings.knowledgebase.categoryDescriptionOptional')}
+                  className="h-8"
+                />
+              </div>
+            ) : (
+              <div className="flex-1 cursor-pointer hover:bg-muted/50 p-2 rounded" onClick={() => onEdit(category)}>
+                <div className="font-medium">{category.name}</div>
+                {category.description && (
+                  <div className="text-sm text-muted-foreground">{category.description}</div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className={`space-x-2 ${editingCategory?.id === category.id ? 'ml-4' : ''}`}>
+            {editingCategory?.id === category.id ? (
+              <>
+                <Button size="sm" onClick={handleUpdateCategory} disabled={updateCategoryMutation.isPending}>{t('common.save')}</Button>
+                <Button variant="ghost" size="sm" onClick={() => setEditingCategory(null)}>{t('common.cancel')}</Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={() => onEdit(category)} aria-label={t('common.edit')}><Edit className="h-4 w-4" /></Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => onDelete(category)} disabled={deleteCategoryMutation.isPending} aria-label={t('common.delete')}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+          </div>
+        </div>
+        <div className="mt-4 pl-6 space-y-3">
+          <h4 className="font-semibold text-sm">{t('settings.knowledgebase.articlesIn', { category: category.name })}</h4>
+          <div className="space-y-1"> {/* Wrapper for consistent spacing */}
+            {(displayedCategoryArticles || []).map((article, articleIndex) => (
+              <ArticleListItem
+                key={article.id}
+                article={article}
+                index={articleIndex}
+                categoryId={category.id}
+                moveArticle={moveArticleInCategory}
+                onEdit={(art) => fetchArticleForEditing(art.categoryId || category.id, art.id)} // Fetch full article content for editing
+                onDelete={handleDeleteArticle} // Uses handleDeleteArticle from CategoryItem props
+                onDropArticle={handleDropArticleInCategory}
+              />
+            ))}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-3" // Adjusted margin for consistency
+            onClick={() => onAddArticle(category.id)}
+          >
+            <Plus className="mr-1.5 h-3.5 w-3.5" /> {t('settings.knowledgebase.addArticle')}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const KnowledgebaseSettings: React.FC = () => {
+  const { toast } = useToast();
+  const { t } = useTranslation();
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryDescription, setNewCategoryDescription] = useState('');
+  const [editingArticle, setEditingArticle] = useState<KnowledgebaseArticle | null>(null);
+  const [newArticleForModal, setNewArticleForModal] = useState<{ categoryId: string; title: string; content: string; isVisible: boolean } | null>(null);
+
+  // Delete confirmation dialog state
+  const [deleteCategoryDialogOpen, setDeleteCategoryDialogOpen] = useState(false);
+  const [categoryToDelete, setCategoryToDelete] = useState<KnowledgebaseCategory | null>(null);
+  const [deleteArticleDialogOpen, setDeleteArticleDialogOpen] = useState(false);
+  const [articleToDelete, setArticleToDelete] = useState<{ categoryId: string; articleId: string; title: string } | null>(null);
+
+  const { data: categories, isLoading: isLoadingCategories } = useQuery<KnowledgebaseCategory[], Error>({
+    queryKey: ['knowledgebaseCategories'],
+    queryFn: fetchCategories,
+    // Keep data fresh but don't refetch too often during D&D
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
+  });
+
+  // Mutations (using React Query's useMutation)
+  const createCategoryMutation = useMutation<KnowledgebaseCategory, Error, { name: string; description?: string }>({
+    mutationFn: async (newCategory) => {
+      const response = await apiFetch('/v1/panel/knowledgebase/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCategory),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to create category' }));
+        throw new Error(errorData.message);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.categoryCreated') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+      setNewCategoryName('');
+      setNewCategoryDescription('');
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const updateCategoryMutation = useMutation<KnowledgebaseCategory, Error, { id: string; name: string; description?: string }>({
+    mutationFn: async (updatedCategory) => {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${updatedCategory.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: updatedCategory.name, description: updatedCategory.description }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to update category' }));
+        throw new Error(errorData.message);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.categoryUpdated') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+      setEditingCategoryState(null); // Use renamed state setter
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const deleteCategoryMutation = useMutation<void, Error, string>({
+    mutationFn: async (categoryId) => {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${categoryId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to delete category' }));
+        throw new Error(errorData.message);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.categoryDeleted') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const reorderCategoriesMutation = useMutation<void, Error, { orderedCategoryIds: string[] }>({
+    mutationFn: async (data) => {
+      const response = await apiFetch('/v1/panel/knowledgebase/categories/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: data.orderedCategoryIds }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to reorder categories' }));
+        throw new Error(errorData.message);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.categoriesReordered') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // State for local optimistic updates during D&D
+  const [displayedCategories, setDisplayedCategories] = useState<KnowledgebaseCategory[]>([]);
+  const [editingCategoryState, setEditingCategoryState] = useState<KnowledgebaseCategory | null>(null); // Renamed to avoid conflict
+
+  useEffect(() => {
+    if (categories) {
+      // Copy before sorting: Array.prototype.sort mutates in place, and
+      // categories is the array held in the react-query cache.
+      setDisplayedCategories([...categories].sort((a, b) => a.ordinal - b.ordinal));
+    }
+  }, [categories]);
+
+  const handleCreateCategory = () => {
+    if (newCategoryName.trim()) {
+      createCategoryMutation.mutate({ 
+        name: newCategoryName.trim(),
+        description: newCategoryDescription.trim() || undefined
+      });
+    }
+  };
+  const handleUpdateCategoryLocal = () => { // Renamed to avoid conflict with prop
+    if (editingCategoryState && editingCategoryState.name.trim()) {
+      updateCategoryMutation.mutate({ 
+        id: editingCategoryState.id, 
+        name: editingCategoryState.name.trim(),
+        description: editingCategoryState.description?.trim() || undefined
+      });
+    }
+  };
+
+  const handleDeleteCategoryClick = (category: KnowledgebaseCategory) => {
+    setCategoryToDelete(category);
+    setDeleteCategoryDialogOpen(true);
+  };
+
+  const confirmDeleteCategory = () => {
+    if (categoryToDelete) {
+      deleteCategoryMutation.mutate(categoryToDelete.id);
+    }
+    setDeleteCategoryDialogOpen(false);
+    setCategoryToDelete(null);
+  };
+
+  const moveCategory = useCallback((dragIndex: number, hoverIndex: number) => {
+    setDisplayedCategories((prevCategories) => {
+      const updatedCategories = [...prevCategories];
+      const [draggedItem] = updatedCategories.splice(dragIndex, 1);
+      if (draggedItem) {
+        updatedCategories.splice(hoverIndex, 0, draggedItem);
+      }
+      return updatedCategories;
+    });
+  }, []);
+
+  const handleDropCategory = () => {
+    // This function is called when a drag operation ends
+    // To be called from useDrop's drop handler in CategoryItem or DndProvider
+    const orderedCategoryIds = displayedCategories.map(cat => cat.id);
+    reorderCategoriesMutation.mutate({ orderedCategoryIds });
+  };
+
+  // Article Mutations
+  const createArticleMutation = useMutation<KnowledgebaseArticle, Error, { categoryId: string; title: string; content: string; isVisible?: boolean }>({
+    mutationFn: async (newArticle) => {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${newArticle.categoryId}/articles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newArticle.title, content: newArticle.content, isVisible: newArticle.isVisible }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to create article' }));
+        throw new Error(errorData.message);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.articleCreated') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] }); // Refetch categories to update articles list
+      setEditingArticle(null); // Clear editing article if open
+      setNewArticleForModal(null); // Clear new article form
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const updateArticleMutation = useMutation<KnowledgebaseArticle, Error, { categoryId: string; articleId: string; title: string; content: string; isVisible: boolean }>({
+    mutationFn: async (updatedArticle) => {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${updatedArticle.categoryId}/articles/${updatedArticle.articleId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: updatedArticle.title, content: updatedArticle.content, isVisible: updatedArticle.isVisible }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to update article' }));
+        throw new Error(errorData.message);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.articleUpdated') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+      setEditingArticle(null);
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const deleteArticleMutation = useMutation<void, Error, { categoryId: string; articleId: string }>({
+    mutationFn: async ({ categoryId, articleId }) => {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${categoryId}/articles/${articleId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to delete article' }));
+        throw new Error(errorData.message);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.articleDeleted') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const reorderArticlesMutation = useMutation<void, Error, { categoryId: string; orderedArticleIds: string[] }>({
+    mutationFn: async (data) => {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${data.categoryId}/articles/reorder`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: data.orderedArticleIds }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to reorder articles' }));
+        throw new Error(errorData.message);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.knowledgebase.articlesReordered') });
+      queryClient.invalidateQueries({ queryKey: ['knowledgebaseCategories'] });
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const openCreateArticleModal = (categoryId: string) => {
+    setNewArticleForModal({ categoryId, title: '', content: '', isVisible: true });
+    
+    // Scroll to the article writing section with smooth animation
+    setTimeout(() => {
+      const articleFormElement = document.querySelector('[data-article-form="true"]');
+      if (articleFormElement) {
+        articleFormElement.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+    }, 100); // Small delay to ensure the form is rendered
+  };
+
+  const handleCreateArticleFromModal = () => {
+    if (newArticleForModal && newArticleForModal.title.trim() && newArticleForModal.content.trim()) {
+      createArticleMutation.mutate({
+        categoryId: newArticleForModal.categoryId,
+        title: newArticleForModal.title,
+        content: newArticleForModal.content,
+        isVisible: newArticleForModal.isVisible,
+      });
+    } else {
+      toast({ title: t('toast.error'), description: t('settings.knowledgebase.titleContentRequired'), variant: "destructive" });
+    }
+  };
+
+  // Function to fetch full article content for editing
+  const fetchArticleForEditing = async (categoryId: string, articleId: string) => {
+    try {
+      const response = await apiFetch(`/v1/panel/knowledgebase/categories/${categoryId}/articles/${articleId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch article details');
+      }
+      const articleData: RawKnowledgebaseArticle = await response.json();
+      setEditingArticle(normalizeArticle(articleData));
+
+      // Scroll to the article editing section with smooth animation
+      setTimeout(() => {
+        const articleFormElement = document.querySelector('[data-article-edit-form="true"]');
+        if (articleFormElement) {
+          articleFormElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+            inline: 'nearest'
+          });
+        }
+      }, 100);
+    } catch (error) {
+      toast({ title: t('toast.error'), description: t('settings.knowledgebase.articleLoadFailed'), variant: "destructive" });
+    }
+  };
+
+  const handleUpdateArticle = () => {
+    if (editingArticle && editingArticle.title.trim() && editingArticle.content.trim()) {
+      updateArticleMutation.mutate({
+        categoryId: editingArticle.categoryId,
+        articleId: editingArticle.id,
+        title: editingArticle.title,
+        content: editingArticle.content,
+        isVisible: editingArticle.isVisible,
+      });
+    }
+  };
+
+  const handleDeleteArticleClick = (categoryId: string, articleId: string, title: string) => {
+    setArticleToDelete({ categoryId, articleId, title });
+    setDeleteArticleDialogOpen(true);
+  };
+
+  const confirmDeleteArticle = () => {
+    if (articleToDelete) {
+      deleteArticleMutation.mutate({ categoryId: articleToDelete.categoryId, articleId: articleToDelete.articleId });
+    }
+    setDeleteArticleDialogOpen(false);
+    setArticleToDelete(null);
+  };
+
+  if (isLoadingCategories) {
+    return <p>{t('settings.knowledgebase.loading')}</p>;
+  }
+
+  return (
+    <DndProvider backend={HTML5Backend}>
+      <div className="space-y-6">
+        <Card className="rounded-card shadow-card">
+          <CardHeader>
+            <CardTitle>{t('settings.knowledgebase.manageCategories')}</CardTitle>
+            <CardDescription>{t('settings.knowledgebase.manageCategoriesDesc')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-2">
+              <div className="flex flex-col md:flex-row gap-2">
+                <Input
+                  type="text"
+                  placeholder={t('settings.knowledgebase.newCategoryName')}
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="flex-grow"
+                />
+                <Button onClick={handleCreateCategory} disabled={createCategoryMutation.isPending} className="w-full md:w-auto">
+                  <Plus className="mr-2 h-4 w-4" /> {t('settings.knowledgebase.addCategory')}
+                </Button>
+              </div>
+              <Input
+                type="text"
+                placeholder={t('settings.knowledgebase.categoryDescriptionOptional')}
+                value={newCategoryDescription}
+                onChange={(e) => setNewCategoryDescription(e.target.value)}
+                className="w-full"
+              />
+            </div>
+
+            {/* List Categories - Drag and Drop will be added here */}
+            <div className="space-y-3">
+              {(displayedCategories || []).map((category, index) => (
+                <CategoryItem
+                  key={category.id}
+                  index={index}
+                  category={category}
+                  moveCategory={moveCategory}
+                  onEdit={setEditingCategoryState}
+                  onDelete={handleDeleteCategoryClick}
+                  onAddArticle={openCreateArticleModal}
+                  editingCategory={editingCategoryState}
+                  handleUpdateCategory={handleUpdateCategoryLocal}
+                  setEditingCategory={setEditingCategoryState}
+                  updateCategoryMutation={updateCategoryMutation}
+                  deleteCategoryMutation={deleteCategoryMutation}
+                  // Pass article related props
+                  handleDeleteArticle={handleDeleteArticleClick} // Global delete
+                  handleDropCategory={handleDropCategory}
+                  reorderArticlesMutation={reorderArticlesMutation} // Pass down the reorder mutation
+                  fetchArticleForEditing={fetchArticleForEditing}
+                />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Modals for editing/creating articles with Markdown editor */}
+        {/* Edit Article Modal */}
+        {editingArticle && !newArticleForModal && ( // Ensure only one modal is trying to render if states overlap by mistake
+            <Card className="mt-6 rounded-card shadow-card" data-article-edit-form="true">
+                <CardHeader>
+                    <CardTitle>{t('settings.knowledgebase.editArticle', { title: editingArticle.title })}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                    <Input
+                        placeholder={t('settings.knowledgebase.articleTitle')}
+                        value={editingArticle.title}
+                        onChange={(e) => setEditingArticle(prev => prev ? {...prev, title: e.target.value} : null)}
+                    />
+                    <MarkdownEditor
+                        value={editingArticle.content}
+                        onChange={(value) => setEditingArticle(prev => prev ? { ...prev, content: value } : null)}
+                        placeholder={t('settings.knowledgebase.articleContent')}
+                    />
+                    <div className="flex items-center space-x-2">
+                        <input
+                            type="checkbox"
+                            id={`article-visible-${editingArticle.id}`}
+                            checked={editingArticle.isVisible}
+                            onChange={(e) => setEditingArticle(prev => prev ? {...prev, isVisible: e.target.checked} : null)}
+                        />
+                        <label htmlFor={`article-visible-${editingArticle.id}`}>{t('settings.knowledgebase.visibleToUsers')}</label>
+                    </div>
+                    <div className="flex justify-end space-x-2">
+                        <Button variant="outline" onClick={() => setEditingArticle(null)}>{t('common.cancel')}</Button>
+                        <Button
+                            onClick={handleUpdateArticle}
+                            disabled={updateArticleMutation.isPending || !editingArticle?.title.trim() || !editingArticle?.content.trim()}
+                        >
+                            {t('settings.knowledgebase.saveArticle')}
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
+        )}
+        
+        {/* Create Article Modal */}
+        {newArticleForModal && (
+          <Card className="mt-6 rounded-card shadow-card" data-article-form="true">
+            <CardHeader>
+              <CardTitle>{t('settings.knowledgebase.createNewArticle')}</CardTitle>
+              <CardDescription>{t('settings.knowledgebase.inCategory', { category: categories?.find(c => c.id === newArticleForModal.categoryId)?.name || t('common.unknown') })}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                placeholder={t('settings.knowledgebase.articleTitle')}
+                value={newArticleForModal.title}
+                onChange={(e) => setNewArticleForModal(prev => prev ? { ...prev, title: e.target.value } : null)}
+              />
+              <MarkdownEditor
+                value={newArticleForModal.content}
+                onChange={(value) => setNewArticleForModal(prev => prev ? { ...prev, content: value } : null)}
+                placeholder={t('settings.knowledgebase.articleContent')}
+              />
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="new-article-visible"
+                  checked={newArticleForModal.isVisible}
+                  onChange={(e) => setNewArticleForModal(prev => prev ? { ...prev, isVisible: e.target.checked } : null)}
+                />
+                <label htmlFor="new-article-visible">{t('settings.knowledgebase.visibleToUsers')}</label>
+              </div>
+              <div className="flex justify-end space-x-2">
+                <Button variant="outline" onClick={() => setNewArticleForModal(null)}>{t('common.cancel')}</Button>
+                <Button
+                  onClick={handleCreateArticleFromModal}
+                  disabled={createArticleMutation.isPending || !newArticleForModal?.title.trim() || !newArticleForModal?.content.trim()}
+                >
+                  {createArticleMutation.isPending ? t('settings.knowledgebase.creating') : t('settings.knowledgebase.createArticle')}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+      </div>
+
+      {/* Delete Category Confirmation Dialog */}
+      <AlertDialog open={deleteCategoryDialogOpen} onOpenChange={setDeleteCategoryDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('settings.knowledgebase.deleteCategoryTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.knowledgebase.deleteCategoryConfirm', { name: categoryToDelete?.name, count: categoryToDelete?.articles?.length || 0 })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setCategoryToDelete(null)}>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteCategory}
+              disabled={deleteCategoryMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteCategoryMutation.isPending ? t('common.deleting') : t('common.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Article Confirmation Dialog */}
+      <AlertDialog open={deleteArticleDialogOpen} onOpenChange={setDeleteArticleDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('settings.knowledgebase.deleteArticleTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.knowledgebase.deleteArticleConfirm', { title: articleToDelete?.title })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setArticleToDelete(null)}>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteArticle}
+              disabled={deleteArticleMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteArticleMutation.isPending ? t('common.deleting') : t('common.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </DndProvider>
+  );
+};
+
+export default KnowledgebaseSettings;

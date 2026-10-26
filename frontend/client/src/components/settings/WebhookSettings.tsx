@@ -1,0 +1,584 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Eye, EyeOff, TestTube, MessageCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { Label } from '@modl-gg/shared-web/components/ui/label';
+import { Switch } from '@modl-gg/shared-web/components/ui/switch';
+import { Separator } from '@modl-gg/shared-web/components/ui/separator';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@modl-gg/shared-web/components/ui/collapsible';
+import { usePermissions } from '@/hooks/use-permissions';
+import { toast } from '@modl-gg/shared-web/hooks/use-toast';
+import { apiFetch } from '@/lib/api';
+import EmbedTemplateEditor from './EmbedTemplateEditor';
+
+interface EmbedField {
+  name: string;
+  value: string;
+  inline: boolean;
+}
+
+interface EmbedTemplate {
+  title: string;
+  description: string;
+  color: string;
+  fields: EmbedField[];
+}
+
+export interface WebhookSettings {
+  discordWebhookUrl: string;
+  discordAdminRoleId: string;
+  botName: string;
+  avatarUrl: string;
+  enabled: boolean;
+  notifications: {
+    newTickets: boolean;
+    newPunishments: boolean;
+    auditLogs: boolean;
+  };
+  embedTemplates?: {
+    newTickets: EmbedTemplate;
+    newPunishments: EmbedTemplate;
+    auditLogs: EmbedTemplate;
+  };
+}
+
+interface WebhookSettingsProps {
+  webhookSettings?: WebhookSettings;
+  onSave?: (settings: WebhookSettings) => Promise<void>;
+  isLoading?: boolean;
+  panelIconUrl?: string;
+}
+
+const WebhookSettings: React.FC<WebhookSettingsProps> = ({
+  webhookSettings,
+  onSave,
+  isLoading = false,
+  panelIconUrl
+}) => {
+  const { hasPermission } = usePermissions();
+  const { t } = useTranslation();
+
+  const [settings, setSettings] = useState<WebhookSettings>({
+    discordWebhookUrl: '',
+    discordAdminRoleId: '',
+    botName: 'modl Panel',
+    avatarUrl: panelIconUrl || '',
+    enabled: false,
+    notifications: {
+      newTickets: true,
+      newPunishments: true,
+      auditLogs: false,
+    },
+    embedTemplates: {
+      newTickets: {
+        title: '🎫 New Ticket Created',
+        description: 'A new **{{type}}** ticket has been submitted.',
+        color: '#3498db',
+        fields: [
+          { name: 'Ticket ID', value: '{{id}}', inline: true },
+          { name: 'Type', value: '{{type}}', inline: true },
+          { name: 'Priority', value: '{{priority}}', inline: true },
+          { name: 'Title', value: '{{title}}', inline: false },
+          { name: 'Submitted By', value: '{{submittedBy}}', inline: true }
+        ]
+      },
+      newPunishments: {
+        title: '⚖️ New Punishment Issued',
+        description: 'A new **{{type}}** punishment has been issued for **{{playerName}}**.',
+        color: '#e74c3c',
+        fields: [
+          { name: 'Punishment ID', value: '{{id}}', inline: true },
+          { name: 'Player', value: '{{playerName}}', inline: true },
+          { name: 'Type', value: '{{type}}', inline: true },
+          { name: 'Severity', value: '{{severity}}', inline: true },
+          { name: 'Duration', value: '{{duration}}', inline: true },
+          { name: 'Issued By', value: '{{issuer}}', inline: true },
+          { name: 'Reason', value: '{{reason}}', inline: false }
+        ]
+      },
+      auditLogs: {
+        title: '📋 Audit Log Entry',
+        description: 'A new audit log entry has been recorded.',
+        color: '#f39c12',
+        fields: [
+          { name: 'User', value: '{{user}}', inline: true },
+          { name: 'Action', value: '{{action}}', inline: true },
+          { name: 'Target', value: '{{target}}', inline: true },
+          { name: 'Details', value: '{{details}}', inline: false }
+        ]
+      }
+    }
+  });
+
+  const [showWebhookUrl, setShowWebhookUrl] = useState(false);
+  const [, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  // The debounce timer id lives in a ref (not state) so rapid successive edits
+  // synchronously see and clear the previously scheduled save, preventing
+  // duplicate auto-save POSTs.
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Collapsible state for embed templates
+  const [isNewTicketsExpanded, setIsNewTicketsExpanded] = useState(false);
+  const [isNewPunishmentsExpanded, setIsNewPunishmentsExpanded] = useState(false);
+  const [isAuditLogsExpanded, setIsAuditLogsExpanded] = useState(false);
+
+  useEffect(() => {
+    if (webhookSettings) {
+      const defaultEmbedTemplates = {
+        newTickets: {
+          title: '🎫 New Ticket Created',
+          description: 'A new **{{type}}** ticket has been submitted.',
+          color: '#3498db',
+          fields: [
+            { name: 'Ticket ID', value: '{{id}}', inline: true },
+            { name: 'Type', value: '{{type}}', inline: true },
+            { name: 'Priority', value: '{{priority}}', inline: true },
+            { name: 'Title', value: '{{title}}', inline: false },
+            { name: 'Submitted By', value: '{{submittedBy}}', inline: true }
+          ]
+        },
+        newPunishments: {
+          title: '⚖️ New Punishment Issued',
+          description: 'A **{{type}}** has been issued to **{{playerName}}**.',
+          color: '#e74c3c',
+          fields: [
+            { name: 'Punishment ID', value: '{{id}}', inline: true },
+            { name: 'Player', value: '{{playerName}}', inline: true },
+            { name: 'Type', value: '{{type}}', inline: true },
+            { name: 'Severity', value: '{{severity}}', inline: true },
+            { name: 'Duration', value: '{{duration}}', inline: true },
+            { name: 'Issued By', value: '{{issuer}}', inline: true },
+            { name: 'Reason', value: '{{reason}}', inline: false }
+          ]
+        },
+        auditLogs: {
+          title: '📋 Audit Log Entry',
+          description: 'A new audit log entry has been recorded.',
+          color: '#f39c12',
+          fields: [
+            { name: 'User', value: '{{user}}', inline: true },
+            { name: 'Action', value: '{{action}}', inline: true },
+            { name: 'Target', value: '{{target}}', inline: true },
+            { name: 'Details', value: '{{details}}', inline: false }
+          ]
+        }
+      };
+
+      setSettings({
+        ...webhookSettings,
+        // Show avatar URL only if it's explicitly set and different from panel icon
+        avatarUrl: (webhookSettings.avatarUrl && 
+                   webhookSettings.avatarUrl !== panelIconUrl && 
+                   webhookSettings.avatarUrl !== '' &&
+                   !webhookSettings.avatarUrl.includes('/panel-icon-')) ? webhookSettings.avatarUrl : '',
+        // Keep the enabled state as is from the saved settings
+        enabled: webhookSettings.enabled || false,
+        // Ensure embedTemplates exist with defaults
+        embedTemplates: webhookSettings.embedTemplates || defaultEmbedTemplates
+      });
+    }
+  }, [webhookSettings, panelIconUrl]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const autoSave = async (newSettings: WebhookSettings) => {
+    if (!hasPermission('admin.settings.modify') || !onSave) {
+      return;
+    }
+
+    // Clear existing timeout (ref read reflects the latest scheduled timer immediately)
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Set new timeout to save after 1 second of no changes
+    saveTimeoutRef.current = setTimeout(async () => {
+      setIsSaving(true);
+      try {
+        // Use panelIconUrl as default if avatar URL is empty
+        const settingsToSave = {
+          ...newSettings,
+          avatarUrl: newSettings.avatarUrl || panelIconUrl || ''
+        };
+        await onSave(settingsToSave);
+      } catch (error) {
+        toast({
+          title: t('settings.webhook.autoSaveFailed'),
+          description: t('settings.webhook.autoSaveFailedDesc'),
+          variant: 'destructive',
+        });
+      } finally {
+        setIsSaving(false);
+      }
+    }, 1000);
+  };
+
+  const handleInputChange = <K extends keyof WebhookSettings>(field: K, value: WebhookSettings[K]) => {
+    // Prevent clearing important fields unintentionally
+    if (field === 'discordWebhookUrl' && value === undefined) {
+      return;
+    }
+
+    const newSettings = {
+      ...settings,
+      [field]: value
+    };
+    setSettings(newSettings);
+    autoSave(newSettings);
+  };
+
+  const handleNotificationChange = (key: keyof WebhookSettings['notifications'], value: boolean) => {
+    const newSettings = {
+      ...settings,
+      notifications: {
+        ...settings.notifications,
+        [key]: value
+      }
+    };
+    setSettings(newSettings);
+    autoSave(newSettings);
+  };
+
+  const handleEmbedTemplateChange = (templateType: 'newTickets' | 'newPunishments' | 'auditLogs', template: EmbedTemplate) => {
+    const newSettings = {
+      ...settings,
+      embedTemplates: {
+        ...settings.embedTemplates!,
+        [templateType]: template
+      }
+    };
+    setSettings(newSettings);
+    autoSave(newSettings);
+  };
+
+  const handleTestWebhook = async () => {
+    if (!settings.discordWebhookUrl || !settings.enabled) {
+      toast({
+        title: t('settings.webhook.cannotTest'),
+        description: t('settings.webhook.cannotTestDesc'),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      setIsTesting(true);
+      const response = await apiFetch('/v1/panel/settings/webhooks/test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          webhookUrl: settings.discordWebhookUrl,
+          adminRoleId: settings.discordAdminRoleId,
+          botName: settings.botName,
+          avatarUrl: settings.avatarUrl || panelIconUrl || undefined
+        })
+      });
+
+      if (response.ok) {
+        toast({
+          title: t('settings.webhook.testSuccessful'),
+          description: t('settings.webhook.testSuccessfulDesc'),
+        });
+      } else {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || 'Test failed');
+      }
+    } catch (error) {
+      toast({
+        title: t('settings.webhook.testFailed'),
+        description: error instanceof Error ? error.message : t('settings.webhook.testFailedDesc'),
+        variant: 'destructive',
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const canModify = hasPermission('admin.settings.modify');
+
+  return (
+    <div className="space-y-6">
+      <Card className="rounded-card shadow-card-inner bg-surface-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageCircle className="h-5 w-5" />
+            {t('settings.webhook.title')}
+          </CardTitle>
+          <CardDescription>
+            {t('settings.webhook.description')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Enable/Disable Webhook */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="webhook-enabled" className="text-base font-medium">
+                {t('settings.webhook.enableWebhook')}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t('settings.webhook.enableWebhookDesc')}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch
+                id="webhook-enabled"
+                checked={settings.enabled}
+                onCheckedChange={(checked) => handleInputChange('enabled', checked)}
+                disabled={!canModify}
+              />
+              {canModify && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestWebhook}
+                  disabled={isTesting || isLoading || !settings.enabled}
+                >
+                  <TestTube className="h-4 w-4 mr-2" />
+                  {isTesting ? t('settings.webhook.testing') : t('settings.webhook.test')}
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Discord Webhook URL */}
+          <div className="space-y-2">
+            <Label htmlFor="webhook-url">{t('settings.webhook.webhookUrl')}</Label>
+            <div className="flex gap-2">
+              <div className="flex-1 relative">
+                <Input
+                  id="webhook-url"
+                  type={showWebhookUrl ? 'text' : 'password'}
+                  placeholder="https://discord.com/api/webhooks/..."
+                  value={settings.discordWebhookUrl || ''}
+                  onChange={(e) => handleInputChange('discordWebhookUrl', e.target.value)}
+                  disabled={!canModify}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-0 top-0 h-full px-3"
+                  onClick={() => setShowWebhookUrl(!showWebhookUrl)}
+                  disabled={!canModify}
+                >
+                  {showWebhookUrl ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {t('settings.webhook.webhookUrlHelp')}
+            </p>
+          </div>
+
+          {/* Admin Role ID */}
+          <div className="space-y-2">
+            <Label htmlFor="admin-role-id">{t('settings.webhook.adminRoleId')}</Label>
+            <Input
+              id="admin-role-id"
+              placeholder="123456789012345678"
+              value={settings.discordAdminRoleId || ''}
+              onChange={(e) => handleInputChange('discordAdminRoleId', e.target.value)}
+              disabled={!canModify}
+            />
+            <p className="text-sm text-muted-foreground">
+              {t('settings.webhook.adminRoleIdHelp')}
+            </p>
+          </div>
+
+          {/* Bot Name */}
+          <div className="space-y-2">
+            <Label htmlFor="bot-name">{t('settings.webhook.botName')}</Label>
+            <Input
+              id="bot-name"
+              placeholder="modl Panel"
+              value={settings.botName || ''}
+              onChange={(e) => handleInputChange('botName', e.target.value)}
+              disabled={!canModify}
+            />
+            <p className="text-sm text-muted-foreground">
+              {t('settings.webhook.botNameHelp')}
+            </p>
+          </div>
+
+          {/* Avatar URL */}
+          <div className="space-y-2">
+            <Label htmlFor="avatar-url">{t('settings.webhook.avatarUrl')}</Label>
+            <Input
+              id="avatar-url"
+              placeholder="https://cdn.discordapp.com/avatars/123456789/avatar.png"
+              value={settings.avatarUrl || ''}
+              onChange={(e) => handleInputChange('avatarUrl', e.target.value)}
+              disabled={!canModify}
+            />
+            <p className="text-sm text-muted-foreground">
+              {t('settings.webhook.avatarUrlHelp')}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Notification Settings */}
+      <Card className="rounded-card shadow-card-inner bg-surface-2">
+        <CardHeader>
+          <CardTitle>{t('settings.webhook.notificationTypes')}</CardTitle>
+          <CardDescription>
+            {t('settings.webhook.notificationTypesDesc')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="notify-tickets" className="text-base font-medium">
+                {t('settings.webhook.notifyNewTickets')}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t('settings.webhook.notifyNewTicketsDesc')}
+              </p>
+            </div>
+            <Switch
+              id="notify-tickets"
+              checked={settings.notifications.newTickets}
+              onCheckedChange={(checked) => handleNotificationChange('newTickets', checked)}
+              disabled={!canModify}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="notify-punishments" className="text-base font-medium">
+                {t('settings.webhook.notifyNewPunishments')}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t('settings.webhook.notifyNewPunishmentsDesc')}
+              </p>
+            </div>
+            <Switch
+              id="notify-punishments"
+              checked={settings.notifications.newPunishments}
+              onCheckedChange={(checked) => handleNotificationChange('newPunishments', checked)}
+              disabled={!canModify}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="notify-audit" className="text-base font-medium">
+                {t('settings.webhook.notifyAuditLogs')}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t('settings.webhook.notifyAuditLogsDesc')}
+              </p>
+            </div>
+            <Switch
+              id="notify-audit"
+              checked={settings.notifications.auditLogs}
+              onCheckedChange={(checked) => handleNotificationChange('auditLogs', checked)}
+              disabled={!canModify}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Embed Template Customization */}
+      <Card className="rounded-card shadow-card-inner bg-surface-2">
+        <CardHeader>
+          <CardTitle>{t('settings.webhook.embedTemplates')}</CardTitle>
+          <CardDescription>
+            {t('settings.webhook.embedTemplatesDesc')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <Collapsible open={isNewTicketsExpanded} onOpenChange={setIsNewTicketsExpanded}>
+            <CollapsibleTrigger className="flex items-center justify-between w-full p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors">
+              <div className="flex items-center gap-2">
+                <Label className="text-base font-medium">{t('settings.webhook.newTicketsTemplate')}</Label>
+                {!settings.notifications.newTickets && (
+                  <Badge variant="secondary" className="text-xs">{t('status.disabled')}</Badge>
+                )}
+              </div>
+              {isNewTicketsExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-4">
+              <EmbedTemplateEditor
+                template={settings.embedTemplates!.newTickets}
+                templateType="newTickets"
+                onChange={(template) => handleEmbedTemplateChange('newTickets', template)}
+                disabled={!canModify}
+              />
+            </CollapsibleContent>
+          </Collapsible>
+
+          <Collapsible open={isNewPunishmentsExpanded} onOpenChange={setIsNewPunishmentsExpanded}>
+            <CollapsibleTrigger className="flex items-center justify-between w-full p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors">
+              <div className="flex items-center gap-2">
+                <Label className="text-base font-medium">{t('settings.webhook.newPunishmentsTemplate')}</Label>
+                {!settings.notifications.newPunishments && (
+                  <Badge variant="secondary" className="text-xs">{t('status.disabled')}</Badge>
+                )}
+              </div>
+              {isNewPunishmentsExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-4">
+              <EmbedTemplateEditor
+                template={settings.embedTemplates!.newPunishments}
+                templateType="newPunishments"
+                onChange={(template) => handleEmbedTemplateChange('newPunishments', template)}
+                disabled={!canModify}
+              />
+            </CollapsibleContent>
+          </Collapsible>
+
+          <Collapsible open={isAuditLogsExpanded} onOpenChange={setIsAuditLogsExpanded}>
+            <CollapsibleTrigger className="flex items-center justify-between w-full p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors">
+              <div className="flex items-center gap-2">
+                <Label className="text-base font-medium">{t('settings.webhook.auditLogsTemplate')}</Label>
+                {!settings.notifications.auditLogs && (
+                  <Badge variant="secondary" className="text-xs">{t('status.disabled')}</Badge>
+                )}
+              </div>
+              {isAuditLogsExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-4">
+              <EmbedTemplateEditor
+                template={settings.embedTemplates!.auditLogs}
+                templateType="auditLogs"
+                onChange={(template) => handleEmbedTemplateChange('auditLogs', template)}
+                disabled={!canModify}
+              />
+            </CollapsibleContent>
+          </Collapsible>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default WebhookSettings;

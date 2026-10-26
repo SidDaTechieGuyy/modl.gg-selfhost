@@ -1,0 +1,871 @@
+import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Shield, Plus, Edit, Trash2, Save, X, GripVertical } from 'lucide-react';
+import { DndProvider, useDrag, useDrop } from 'react-dnd';
+import { HTML5Backend } from 'react-dnd-html5-backend';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { Label } from '@modl-gg/shared-web/components/ui/label';
+import { Checkbox } from '@modl-gg/shared-web/components/ui/checkbox';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@modl-gg/shared-web/components/ui/dialog";
+import { Separator } from '@modl-gg/shared-web/components/ui/separator';
+import { useRoles, usePermissions, useCreateRole, useUpdateRole, useDeleteRole } from '@/hooks/use-data';
+import { useAuth } from '@/hooks/use-auth';
+import { usePermissions as useUserPermissions } from '@/hooks/use-permissions';
+import { apiFetch } from '@/lib/api';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@modl-gg/shared-web/components/ui/alert-dialog';
+
+// Permission categories and definitions
+interface Permission {
+  id: string;
+  name: string;
+  description: string;
+  category: 'punishment' | 'ticket' | 'admin' | 'staff';
+  parentId: string | null;
+}
+
+interface StaffRole {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  isDefault: boolean;
+  userCount?: number;
+  order?: number;
+  rank?: number; // For drag and drop ordering
+}
+
+const PERMISSION_CATEGORIES = {
+  punishment: 'punishment',
+  ticket: 'ticket',
+  admin: 'admin',
+  staff: 'staff'
+};
+
+// Get role order from the role object (lower order = higher authority)
+const getRoleOrder = (role: StaffRole): number => {
+  return role.order ?? 999; // Default to high number if order is not set
+};
+
+// Draggable Role Card Component
+interface DraggableRoleCardProps {
+  role: StaffRole;
+  index: number;
+  currentUserRole: string | undefined;
+  roleOrderMap: Map<string, number>;
+  onEditRole: (role: StaffRole) => void;
+  onDeleteRole: (role: StaffRole) => void;
+  onMoveRole: (dragIndex: number, hoverIndex: number) => void;
+  onCommitReorder: (dragIndex: number, hoverIndex: number) => void;
+  onDragStart: () => void;
+  onDragEnd: (didDrop: boolean) => void;
+  getPermissionsByCategory: (category: string) => Permission[];
+  hasPermission: (role: StaffRole, permissionId: string) => boolean;
+}
+
+const DraggableRoleCard: React.FC<DraggableRoleCardProps> = ({
+  role,
+  index,
+  currentUserRole,
+  roleOrderMap,
+  onEditRole,
+  onDeleteRole,
+  onMoveRole,
+  onCommitReorder,
+  onDragStart,
+  onDragEnd,
+  getPermissionsByCategory,
+  hasPermission
+}) => {
+  const { t } = useTranslation();
+  const currentUserOrder = roleOrderMap.get(currentUserRole || '') ?? 999;
+  const roleOrder = getRoleOrder(role);
+  // User can drag roles that have higher order number (lower authority) and not super admin
+  const canDragRole = role.name !== 'Super Admin' && currentUserOrder < roleOrder;
+
+  const [{ isDragging }, drag] = useDrag(() => ({
+    type: 'role',
+    item: () => {
+      onDragStart();
+      return { index, role, originalIndex: index };
+    },
+    canDrag: canDragRole,
+    end: (_item, monitor) => {
+      const didDrop = monitor.didDrop();
+      onDragEnd(didDrop);
+    },
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  }));
+
+  const [{ isOver, canDrop }, drop] = useDrop({
+    accept: 'role',
+    hover: (draggedItem: { index: number; role: StaffRole; originalIndex: number }) => {
+      if (draggedItem.index === index) return;
+      
+      // Don't allow dropping on Super Admin or moving Super Admin
+      if (role.name === 'Super Admin' || draggedItem.role.name === 'Super Admin') return;
+      
+      // Check if current user can move the dragged role to this position
+      const draggedRoleOrder = getRoleOrder(draggedItem.role);
+      const targetRoleOrder = getRoleOrder(role);
+      
+      // User must have lower order (higher authority) than both the dragged role and target position
+      if (currentUserOrder >= draggedRoleOrder || currentUserOrder >= targetRoleOrder) return;
+      
+      // Only update visual state during hover
+      onMoveRole(draggedItem.index, index);
+      draggedItem.index = index;
+    },
+    drop: (draggedItem: { index: number; role: StaffRole; originalIndex: number }) => {
+      // Don't allow dropping on Super Admin or moving Super Admin
+      if (role.name === 'Super Admin' || draggedItem.role.name === 'Super Admin') return;
+      
+      // Check if current user can move the dragged role to this position
+      const draggedRoleOrder = getRoleOrder(draggedItem.role);
+      const targetRoleOrder = getRoleOrder(role);
+      
+      // User must have lower order (higher authority) than both the dragged role and target position
+      if (currentUserOrder >= draggedRoleOrder || currentUserOrder >= targetRoleOrder) return;
+      
+      // Only commit if the position actually changed
+      if (draggedItem.originalIndex !== index) {
+        onCommitReorder(draggedItem.originalIndex, index);
+      }
+    },
+    collect: (monitor) => ({
+      isOver: monitor.isOver(),
+      canDrop: monitor.canDrop(),
+    }),
+  });
+
+  // Combine drag and drop refs
+  const ref = (node: HTMLDivElement | null) => {
+    drag(drop(node));
+  };
+
+  return (
+    <Card
+      ref={ref}
+      className={`p-4 rounded-card shadow-card-inner bg-surface-2 transition-all ${
+        isDragging ? 'opacity-50' : ''
+      } ${isOver && canDrop ? 'border-primary bg-primary/5' : ''} ${
+        canDragRole ? 'cursor-move' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-3">
+          {canDragRole && (
+            <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab" />
+          )}
+          <h4 className="font-medium">{role.name}</h4>
+          {role.isDefault && (
+            <Badge variant="outline" className="text-xs">
+              {t('settings.roles.default')}
+            </Badge>
+          )}
+          {role.userCount !== undefined && (
+            <Badge variant="secondary" className="text-xs">
+              {t('settings.roles.usersCount', { count: role.userCount })}
+            </Badge>
+          )}
+          {role.name === 'Super Admin' && (
+            <Badge variant="default" className="text-xs bg-warning text-warning-foreground">
+              {t('settings.roles.highestRank')}
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onEditRole(role)}
+            disabled={role.name === 'Super Admin' || (roleOrderMap.get(currentUserRole || '') ?? 999) >= getRoleOrder(role)}
+            aria-label={t('common.edit')}
+          >
+            <Edit className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onDeleteRole(role)}
+            disabled={role.name === 'Super Admin' || (roleOrderMap.get(currentUserRole || '') ?? 999) >= getRoleOrder(role)}
+            aria-label={t('common.delete')}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground mb-3">{role.description}</p>
+      
+      {/* Permission Summary */}
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-muted-foreground">{t('settings.roles.permissions')}:</div>
+        <div className="flex flex-wrap gap-1">
+          {Object.entries(PERMISSION_CATEGORIES).map(([category, label]) => {
+            const categoryPermissions = getPermissionsByCategory(category);
+            // Count only parent/standalone permissions for badge totals
+            const parentPermissions = categoryPermissions.filter((p: Permission) => !p.parentId);
+            const total = parentPermissions.length;
+            // Super Admin always has all permissions
+            const isSuperAdmin = role.name === 'Super Admin' || role.id === 'super-admin';
+            const granted = isSuperAdmin ? total : parentPermissions.filter((p: Permission) => hasPermission(role, p.id)).length;
+
+            if (total === 0) return null;
+
+            return (
+              <Badge
+                key={category}
+                variant={granted === total ? "default" : granted > 0 ? "secondary" : "outline"}
+                className="text-xs"
+              >
+                {t(`settings.roles.category.${label}`)}: {granted}/{total}
+              </Badge>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+export default function StaffRolesCard() {
+  const { t } = useTranslation();
+  const [selectedRole, setSelectedRole] = useState<StaffRole | null>(null);
+  const [isEditingRole, setIsEditingRole] = useState(false);
+  const [isCreatingRole, setIsCreatingRole] = useState(false);
+  const [roleFormData, setRoleFormData] = useState({ name: '', description: '', permissions: [] as string[] });
+  const [deleteConfirmRole, setDeleteConfirmRole] = useState<StaffRole | null>(null);
+  const [localRoles, setLocalRoles] = useState<StaffRole[]>([]);
+  const [originalRoles, setOriginalRoles] = useState<StaffRole[]>([]);
+  const [pendingReorder, setPendingReorder] = useState<StaffRole[] | null>(null);
+  const [showReorderConfirm, setShowReorderConfirm] = useState(false);
+  const [, setIsDragInProgress] = useState(false);
+  const { toast } = useToast();
+  
+  // API hooks
+  const { data: rolesData, isLoading: rolesLoading } = useRoles();
+  const { data: permissionsData, isLoading: permissionsLoading } = usePermissions();
+  const { user: currentUser } = useAuth();
+  const createRoleMutation = useCreateRole();
+  const updateRoleMutation = useUpdateRole();
+  const deleteRoleMutation = useDeleteRole();
+  const { hasPermission: userHasPermission, isSuperAdmin } = useUserPermissions();
+
+  // Check if the current user can grant a specific permission
+  const canGrantPermission = (permissionId: string): boolean => {
+    if (isSuperAdmin) return true;
+    return userHasPermission(permissionId);
+  };
+
+  const roles = rolesData?.roles || [];
+  const permissionCatalog = permissionsData?.permissions || [];
+
+  // Create role order map from roles data (copying StaffManagementPanel approach)
+  const roleOrderMap = new Map<string, number>();
+  if (roles) {
+    roles.forEach((role: StaffRole) => {
+      roleOrderMap.set(role.name, role.order ?? 999);
+    });
+  }
+  
+  // Update local roles when server data changes
+  useEffect(() => {
+    if (roles.length > 0) {
+      // Sort roles by order (lower order = higher authority)
+      const sortedRoles = [...roles].sort((a, b) => {
+        const aOrder = a.order ?? 999;
+        const bOrder = b.order ?? 999;
+        return aOrder - bOrder;
+      });
+      setLocalRoles(sortedRoles);
+      setOriginalRoles(sortedRoles);
+    }
+  }, [roles]);
+
+  // Guard placed AFTER all hook declarations so the hook count never changes
+  // between renders (Rules of Hooks).
+  if (!currentUser) {
+    return <div>{t('common.loadingUser')}</div>;
+  }
+
+  // Handle drag start
+  const handleDragStart = () => {
+    setIsDragInProgress(true);
+  };
+
+  // Handle drag end (whether successful or cancelled)
+  const handleDragEnd = (didDrop: boolean) => {
+    setIsDragInProgress(false);
+    // If drag was cancelled and no drop occurred, reset to original positions
+    if (!didDrop) {
+      setLocalRoles(originalRoles);
+    }
+  };
+
+  // Handle role reordering during drag (preview only)
+  const moveRole = (dragIndex: number, hoverIndex: number) => {
+    const newRoles = [...localRoles];
+    const draggedRole = newRoles[dragIndex];
+    if (!draggedRole) return;
+
+    // Remove the dragged role and insert at new position
+    newRoles.splice(dragIndex, 1);
+    newRoles.splice(hoverIndex, 0, draggedRole);
+    
+    // Only update local state for visual feedback, don't trigger confirmation yet
+    setLocalRoles(newRoles);
+  };
+
+  // Handle role reordering when drag ends (actual commit)
+  const commitRoleReorder = (_originalIndex: number, _targetIndex: number) => {
+    // The localRoles state already reflects the current visual state from hover operations
+    // We just need to set pending reorder and show confirmation
+    setPendingReorder([...localRoles]);
+    setShowReorderConfirm(true);
+  };
+
+  // Save role reordering to server
+  const saveRoleOrder = async () => {
+    if (!pendingReorder) return;
+    
+    try {
+      // Filter out Super Admin from the reorder request since it should never be reordered
+      // Super Admin should always stay at order 0, other roles start from order 1
+      const nonSuperAdminRoles = pendingReorder.filter(role => role.name !== 'Super Admin');
+
+      let roleOrder: Array<{ id: string; order: number }>;
+      if (isSuperAdmin) {
+        // Super Admin has authority over every role, so it may renumber the
+        // entire non-super-admin hierarchy starting at 1.
+        roleOrder = nonSuperAdminRoles.map((role, index) => ({
+          id: role.id,
+          order: index + 1, // Start from 1 since Super Admin is always 0
+        }));
+      } else {
+        // A non-super-admin performer may only reorder roles STRICTLY below
+        // their own authority. The backend rejects the whole request if any
+        // submitted role is at/above the performer's order, so we must:
+        //  (1) only submit roles whose order is greater than the performer's, and
+        //  (2) assign new orders that remain strictly greater than performerOrder,
+        //      preserving the existing higher-authority roles' positions.
+        const performerOrder = roleOrderMap.get(currentUser.role) ?? 999;
+        const editableRoles = nonSuperAdminRoles.filter(role => {
+          const currentOrder = role.order ?? 999;
+          return currentOrder > performerOrder;
+        });
+        roleOrder = editableRoles.map((role, index) => ({
+          id: role.id,
+          order: performerOrder + 1 + index,
+        }));
+      }
+
+      if (roleOrder.length === 0) {
+        // Nothing the performer is allowed to reorder; treat as a no-op success.
+        setOriginalRoles([...localRoles]);
+        setPendingReorder(null);
+        setShowReorderConfirm(false);
+        return;
+      }
+
+      const response = await apiFetch('/v1/panel/roles/reorder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ roleOrder }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to update role order');
+      }
+      
+      toast({
+        title: t('settings.roles.roleOrderUpdated'),
+        description: t('settings.roles.roleHierarchySaved'),
+      });
+      
+      // Update original roles to the new order so future cancellations work correctly
+      setOriginalRoles([...localRoles]);
+      setPendingReorder(null);
+      setShowReorderConfirm(false);
+    } catch (error) {
+      // Revert the local change if the API call fails
+      setLocalRoles(originalRoles);
+      toast({
+        title: t('toast.error'),
+        description: t('settings.roles.saveOrderFailed'),
+        variant: "destructive"
+      });
+      setPendingReorder(null);
+      setShowReorderConfirm(false);
+    }
+  };
+
+  // Cancel role reordering
+  const cancelRoleOrder = () => {
+    // Reset to original order before the drag operation
+    setLocalRoles(originalRoles);
+    setPendingReorder(null);
+    setShowReorderConfirm(false);
+  };
+
+  // Show loading state
+  if (rolesLoading || permissionsLoading) {
+    return (
+      <Card className="rounded-card shadow-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" />
+            {t('settings.roles.staffRolesPermissions')}
+          </CardTitle>
+          <CardDescription>{t('settings.roles.loadingRoles')}</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  const handleCreateRole = () => {
+    setRoleFormData({ name: '', description: '', permissions: [] });
+    setIsCreatingRole(true);
+    setSelectedRole(null);
+  };
+
+  const handleEditRole = (role: StaffRole) => {
+    if (role.name === 'Super Admin') {
+      toast({
+        title: t('settings.roles.cannotEditSuperAdmin'),
+        description: t('settings.roles.cannotEditSuperAdminDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Check if user can edit this role based on hierarchy
+    const currentUserOrder = roleOrderMap.get(currentUser.role || '') ?? 999;
+    if (currentUserOrder >= getRoleOrder(role)) {
+      toast({
+        title: t('settings.roles.cannotEditRole'),
+        description: t('settings.roles.cannotEditRoleDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+    setRoleFormData({ name: role.name, description: role.description, permissions: [...role.permissions] });
+    setSelectedRole(role);
+    setIsEditingRole(true);
+  };
+
+  const handleSaveRole = async () => {
+    if (!roleFormData.name.trim()) {
+      toast({
+        title: t('settings.roles.invalidRoleName'),
+        description: t('settings.roles.roleNameEmpty'),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (!roleFormData.description.trim()) {
+      toast({
+        title: t('settings.roles.invalidRoleDescription'),
+        description: t('settings.roles.roleDescriptionEmpty'),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      if (isCreatingRole) {
+        await createRoleMutation.mutateAsync({
+          name: roleFormData.name,
+          description: roleFormData.description,
+          permissions: roleFormData.permissions
+        });
+        toast({
+          title: t('settings.roles.roleCreated'),
+          description: t('settings.roles.roleCreatedDesc', { name: roleFormData.name }),
+        });
+      } else if (selectedRole && isEditingRole) {
+        await updateRoleMutation.mutateAsync({
+          id: selectedRole.id,
+          name: roleFormData.name,
+          description: roleFormData.description,
+          permissions: roleFormData.permissions
+        });
+        toast({
+          title: t('settings.roles.roleUpdated'),
+          description: t('settings.roles.roleUpdatedDesc', { name: roleFormData.name }),
+        });
+      }
+
+      setIsCreatingRole(false);
+      setIsEditingRole(false);
+      setSelectedRole(null);
+    } catch (error) {
+      toast({
+        title: t('toast.error'),
+        description: error instanceof Error ? error.message : t('settings.roles.saveRoleFailed'),
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleDeleteRole = (role: StaffRole) => {
+    if (role.name === 'Super Admin') {
+      toast({
+        title: t('settings.roles.cannotDeleteSuperAdmin'),
+        description: t('settings.roles.cannotDeleteSuperAdminDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Check if user can delete this role based on hierarchy
+    const currentUserOrder = roleOrderMap.get(currentUser.role || '') ?? 999;
+    if (currentUserOrder >= getRoleOrder(role)) {
+      toast({
+        title: t('settings.roles.cannotDeleteRole'),
+        description: t('settings.roles.cannotDeleteRoleDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+    setDeleteConfirmRole(role);
+  };
+
+  const confirmDeleteRole = async () => {
+    if (deleteConfirmRole) {
+      try {
+        await deleteRoleMutation.mutateAsync(deleteConfirmRole.id);
+        toast({
+          title: t('settings.roles.roleDeleted'),
+          description: t('settings.roles.roleDeletedDesc', { name: deleteConfirmRole.name }),
+        });
+        setDeleteConfirmRole(null);
+      } catch (error) {
+        toast({
+          title: t('toast.error'),
+          description: error instanceof Error ? error.message : t('settings.roles.deleteRoleFailed'),
+          variant: "destructive"
+        });
+      }
+    }
+  };
+
+  const togglePermission = (permissionId: string) => {
+    if (!canGrantPermission(permissionId)) return;
+    const isCurrentlyEnabled = roleFormData.permissions.includes(permissionId);
+    const childPermissions = permissionCatalog.filter((p: Permission) => p.parentId === permissionId).map((p: Permission) => p.id);
+
+    if (isCurrentlyEnabled) {
+      // Toggling OFF: remove only the parent, children become individually manageable
+      setRoleFormData(prev => ({
+        ...prev,
+        permissions: prev.permissions.filter(p => p !== permissionId)
+      }));
+    } else {
+      // Toggling ON: add the parent and all its children
+      setRoleFormData(prev => ({
+        ...prev,
+        permissions: [...new Set([...prev.permissions, permissionId, ...childPermissions])]
+      }));
+    }
+  };
+
+  const getPermissionsByCategory = (category: string) => {
+    return permissionCatalog.filter((p: Permission) => p.category === category);
+  };
+
+  const hasPermission = (role: StaffRole, permissionId: string) => {
+    if (role.permissions.includes(permissionId)) return true;
+    return role.permissions.some(p => permissionId.startsWith(p + '.'));
+  };
+
+  // Helper function to check if the role form is valid
+  const isRoleFormValid = () => {
+    return roleFormData.name.trim() !== '' && roleFormData.description.trim() !== '';
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card className="rounded-card shadow-card">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-5 w-5" />
+                {t('settings.roles.staffRolesPermissions')}
+              </CardTitle>
+              <CardDescription>
+                {t('settings.roles.staffRolesDesc')}
+              </CardDescription>
+            </div>
+            <Button onClick={handleCreateRole} className="flex items-center gap-2">
+              <Plus className="h-4 w-4" />
+              {t('settings.roles.createRole')}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Roles List */}
+          <DndProvider backend={HTML5Backend}>
+            <div className="space-y-3">
+              {localRoles.map((role, index) => (
+                <DraggableRoleCard
+                  key={role.id}
+                  role={role}
+                  index={index}
+                  currentUserRole={currentUser.role}
+                  roleOrderMap={roleOrderMap}
+                  onEditRole={handleEditRole}
+                  onDeleteRole={handleDeleteRole}
+                  onMoveRole={moveRole}
+                  onCommitReorder={commitRoleReorder}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  getPermissionsByCategory={getPermissionsByCategory}
+                  hasPermission={hasPermission}
+                />
+              ))}
+            </div>
+          </DndProvider>
+        </CardContent>
+      </Card>
+
+      {/* Role Creation/Edit Dialog */}
+      <Dialog open={isCreatingRole || isEditingRole} onOpenChange={(open) => {
+        if (!open) {
+          setIsCreatingRole(false);
+          setIsEditingRole(false);
+          setSelectedRole(null);
+        }
+      }}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {isCreatingRole ? t('settings.roles.createNewRole') : t('settings.roles.editRole')}
+            </DialogTitle>
+            <DialogDescription>
+              {t('settings.roles.configureRoleDesc')}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6">
+            {/* Basic Info */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="role-name">{t('settings.roles.roleName')} <span className="text-destructive">*</span></Label>
+                <Input
+                  id="role-name"
+                  value={roleFormData.name}
+                  onChange={(e) => setRoleFormData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder={t('settings.roles.roleNamePlaceholder')}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="role-description">{t('settings.tickets.description')} <span className="text-destructive">*</span></Label>
+                <Input
+                  id="role-description"
+                  value={roleFormData.description}
+                  onChange={(e) => setRoleFormData(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder={t('settings.roles.roleDescriptionPlaceholder')}
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Permissions */}
+            <div className="space-y-4">
+              <h4 className="font-medium">{t('settings.roles.permissions')}</h4>
+              
+              {Object.entries(PERMISSION_CATEGORIES).map(([category, label]) => {
+                const categoryPermissions = getPermissionsByCategory(category);
+                if (categoryPermissions.length === 0) return null;
+
+                // Separate parents and children
+                const parentPermissions = categoryPermissions.filter((p: Permission) => !p.parentId);
+                const getChildren = (parentId: string) => categoryPermissions.filter((p: Permission) => p.parentId === parentId);
+                const isParentEnabled = (parentId: string) => roleFormData.permissions.includes(parentId);
+
+                return (
+                  <div key={category} className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <h5 className="font-medium text-sm">{t(`settings.roles.category.${label}`)}</h5>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const grantablePermissions = categoryPermissions.filter((p: Permission) => canGrantPermission(p.id)).map((p: Permission) => p.id);
+                            setRoleFormData(prev => ({
+                              ...prev,
+                              permissions: [...prev.permissions.filter((p: string) => !grantablePermissions.includes(p)), ...grantablePermissions]
+                            }));
+                          }}
+                        >
+                          {t('common.selectAll')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const grantablePermissions = categoryPermissions.filter((p: Permission) => canGrantPermission(p.id)).map((p: Permission) => p.id);
+                            setRoleFormData(prev => ({
+                              ...prev,
+                              permissions: prev.permissions.filter((p: string) => !grantablePermissions.includes(p))
+                            }));
+                          }}
+                        >
+                          {t('common.clearAll')}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className={parentPermissions.some((p: Permission) => getChildren(p.id).length > 0) ? "space-y-3 pl-4" : "grid grid-cols-1 md:grid-cols-2 gap-3 pl-4"}>
+                      {parentPermissions.map((permission: Permission) => {
+                        const children = getChildren(permission.id);
+                        const parentChecked = isParentEnabled(permission.id);
+
+                        return (
+                          <div key={permission.id} className="space-y-2">
+                            {/* Parent permission */}
+                            <div className="flex items-start space-x-2">
+                              <Checkbox
+                                id={permission.id}
+                                checked={roleFormData.permissions.includes(permission.id)}
+                                disabled={!canGrantPermission(permission.id)}
+                                onCheckedChange={() => togglePermission(permission.id)}
+                              />
+                              <div className="grid gap-1.5 leading-none">
+                                <Label
+                                  htmlFor={permission.id}
+                                  className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 ${!canGrantPermission(permission.id) ? 'text-muted-foreground' : ''}`}
+                                >
+                                  {permission.name}
+                                </Label>
+                                <p className="text-xs text-muted-foreground">
+                                  {!canGrantPermission(permission.id) ? t('settings.roles.noPermission') : permission.description}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Child permissions */}
+                            {children.length > 0 && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pl-8">
+                                {children.map((child: Permission) => {
+                                  const cantGrant = !canGrantPermission(child.id);
+                                  const isDisabled = parentChecked || cantGrant;
+                                  return (
+                                    <div key={child.id} className="flex items-start space-x-2">
+                                      <Checkbox
+                                        id={child.id}
+                                        checked={parentChecked || roleFormData.permissions.includes(child.id)}
+                                        disabled={isDisabled}
+                                        onCheckedChange={() => !isDisabled && togglePermission(child.id)}
+                                      />
+                                      <div className="grid gap-1.5 leading-none">
+                                        <Label
+                                          htmlFor={child.id}
+                                          className={`text-sm font-medium leading-none ${isDisabled ? 'text-muted-foreground' : ''}`}
+                                        >
+                                          {child.name}
+                                        </Label>
+                                        <p className="text-xs text-muted-foreground">
+                                          {cantGrant ? t('settings.roles.noPermission') : parentChecked ? t('settings.roles.grantedByParent') : child.description}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {category !== 'staff' && <Separator />}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setIsCreatingRole(false);
+              setIsEditingRole(false);
+              setSelectedRole(null);
+            }}>
+              <X className="h-4 w-4 mr-2" />
+              {t('common.cancel')}
+            </Button>
+            <Button
+              onClick={handleSaveRole}
+              disabled={createRoleMutation.isPending || updateRoleMutation.isPending || !isRoleFormValid()}
+            >
+              <Save className="h-4 w-4 mr-2" />
+              {createRoleMutation.isPending || updateRoleMutation.isPending
+                ? t('common.saving')
+                : isCreatingRole ? t('settings.roles.createRole') : t('common.saveChanges')
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteConfirmRole} onOpenChange={(open) => !open && setDeleteConfirmRole(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('settings.roles.deleteRoleTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.roles.deleteRoleConfirm', { name: deleteConfirmRole?.name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteConfirmRole(null)}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteRole}
+              disabled={deleteRoleMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {deleteRoleMutation.isPending ? t('common.deleting') : t('settings.roles.deleteRole')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Role Reorder Confirmation Dialog */}
+      <AlertDialog open={showReorderConfirm} onOpenChange={setShowReorderConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('settings.roles.confirmRoleReordering')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.roles.confirmRoleReorderingDesc')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelRoleOrder}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={saveRoleOrder}>
+              {t('settings.roles.saveNewOrder')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

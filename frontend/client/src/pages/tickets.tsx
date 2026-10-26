@@ -1,0 +1,821 @@
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { useLocation } from 'wouter';
+import { useTranslation } from 'react-i18next';
+import {
+  CircleDot,
+  CheckCircle2,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  EyeOff,
+  User,
+  SortAsc,
+  Plus
+} from 'lucide-react';
+import { formatTimeAgo } from '../utils/date-utils';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent } from '@modl-gg/shared-web/components/ui/card';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { Checkbox } from '@modl-gg/shared-web/components/ui/checkbox';
+import { Skeleton } from '@modl-gg/shared-web/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@modl-gg/shared-web/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@modl-gg/shared-web/components/ui/select';
+import { useTickets, useTicketStatusCounts, useBulkUpdateTickets, useLabels, useStaff, useAddTicketTag, useRemoveTicketTag } from '@/hooks/use-data';
+import { useIsMobile } from '@modl-gg/shared-web/hooks/use-mobile';
+import PageContainer from '@/components/layout/PageContainer';
+import { FilterDropdown } from '@/components/tickets/FilterDropdown';
+import { BulkActionBar } from '@/components/tickets/BulkActionBar';
+import { LabelBadge } from '@/components/ui/label-badge';
+import { Popover, PopoverContent, PopoverTrigger } from '@modl-gg/shared-web/components/ui/popover';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+
+interface Ticket {
+  _id?: string;
+  id: string;
+  type: string;
+  subject: string;
+  reportedBy: string;
+  reportedByName?: string;
+  date: string;
+  status: string;
+  locked?: boolean;
+  hidden?: boolean;
+  tags?: string[];
+  assignedTo?: string[] | string;
+  lastReply?: {
+    created: string;
+    name: string;
+    staff: boolean;
+  };
+  replyCount?: number;
+}
+
+interface Label {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+}
+
+interface TicketRowProps {
+  ticket: Ticket;
+  isSelected: boolean;
+  labels: Label[];
+  labelByName: Map<string, Label>;
+  onSelect: (ticketId: string) => void;
+  onNavigate: (ticketId: string) => void;
+  onAddLabel: (ticketId: string, labelName: string) => void;
+  onRemoveLabel: (ticketId: string, labelName: string) => void;
+  ticketMetaLabel: string;
+  hiddenLabel: string;
+  repliesCountLabel: string;
+}
+
+const TicketRow = memo(({
+  ticket,
+  isSelected,
+  labels,
+  labelByName,
+  onSelect,
+  onNavigate,
+  onAddLabel,
+  onRemoveLabel,
+  ticketMetaLabel,
+  hiddenLabel,
+  repliesCountLabel,
+}: TicketRowProps) => {
+  const ticketLabels = ticket.tags || [];
+  const availableLabelsForTicket = labels.filter((l) => !ticketLabels.includes(l.name));
+
+  const assigneeDisplay = Array.isArray(ticket.assignedTo)
+    ? ticket.assignedTo.join(', ')
+    : (ticket.assignedTo || '');
+
+  return (
+    <TableRow
+      className={`border-b border-border hover:bg-muted/50 cursor-pointer ${isSelected ? 'bg-primary/5' : ''}`}
+    >
+      <TableCell className="w-12 px-3" onClick={(e) => e.stopPropagation()}>
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={() => onSelect(ticket.id)}
+          className="h-5 w-5"
+        />
+      </TableCell>
+      <TableCell onClick={() => onNavigate(ticket.id)}>
+        <div className="flex items-start gap-3">
+          {ticket.locked ? (
+            <CheckCircle2 className="h-4 w-4 text-purple-500 mt-1 flex-shrink-0" />
+          ) : (
+            <CircleDot className="h-4 w-4 text-green-500 mt-1 flex-shrink-0" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium text-sm">{ticket.subject}</span>
+              {ticket.hidden && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
+                  <EyeOff className="h-3 w-3" />
+                  {hiddenLabel}
+                </span>
+              )}
+              {ticketLabels.map((tagName) => {
+                const label = labelByName.get(tagName);
+                return (
+                  <LabelBadge
+                    key={tagName}
+                    name={tagName}
+                    color={label?.color || '#6b7280'}
+                    size="sm"
+                    onRemove={() => onRemoveLabel(ticket.id, tagName)}
+                  />
+                );
+              })}
+              {availableLabelsForTicket.length > 0 && (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        className="h-5 w-5 flex items-center justify-center rounded-full border border-dashed border-muted-foreground/30 text-muted-foreground hover:border-primary hover:text-primary transition-colors"
+                        title="Add label"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-1" align="start">
+                      {availableLabelsForTicket.map((label) => (
+                        <button
+                          key={label.id}
+                          onClick={() => onAddLabel(ticket.id, label.name)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted transition-colors text-left"
+                        >
+                          <span
+                            className="w-3 h-3 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: label.color }}
+                          />
+                          <span className="truncate">{label.name}</span>
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {ticketMetaLabel}
+            </div>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="text-right text-sm text-muted-foreground">
+        {assigneeDisplay && (
+          <div className="flex items-center justify-end gap-1">
+            <User className="h-3.5 w-3.5" />
+            <span>{assigneeDisplay}</span>
+          </div>
+        )}
+      </TableCell>
+      <TableCell className="text-right text-sm text-muted-foreground whitespace-nowrap">
+        {repliesCountLabel}
+      </TableCell>
+      <TableCell className="text-right text-sm text-muted-foreground whitespace-nowrap">
+        {ticket.lastReply ? formatTimeAgo(ticket.lastReply.created) : '-'}
+      </TableCell>
+    </TableRow>
+  );
+});
+
+TicketRow.displayName = 'TicketRow';
+
+interface TicketCardProps {
+  ticket: Ticket;
+  isSelected: boolean;
+  labels: Label[];
+  labelByName: Map<string, Label>;
+  onSelect: (ticketId: string) => void;
+  onNavigate: (ticketId: string) => void;
+  onAddLabel: (ticketId: string, labelName: string) => void;
+  onRemoveLabel: (ticketId: string, labelName: string) => void;
+}
+
+const TicketCard = memo(({
+  ticket,
+  isSelected,
+  labels,
+  labelByName,
+  onSelect,
+  onNavigate,
+  onAddLabel,
+  onRemoveLabel,
+}: TicketCardProps) => {
+  const ticketLabels = ticket.tags || [];
+  const availableLabelsForTicket = labels.filter((l) => !ticketLabels.includes(l.name));
+
+  const assigneeDisplay = Array.isArray(ticket.assignedTo)
+    ? ticket.assignedTo.join(', ')
+    : (ticket.assignedTo || '');
+
+  return (
+    <Card
+      className={`mb-3 shadow-card ${isSelected ? 'ring-2 ring-primary' : ''}`}
+      onClick={() => onNavigate(ticket.id)}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <div onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={isSelected}
+              onCheckedChange={() => onSelect(ticket.id)}
+              className="h-5 w-5"
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              {ticket.locked ? (
+                <CheckCircle2 className="h-4 w-4 text-purple-500 flex-shrink-0" />
+              ) : (
+                <CircleDot className="h-4 w-4 text-green-500 flex-shrink-0" />
+              )}
+              <span className="font-medium text-sm truncate">{ticket.subject}</span>
+              {ticket.hidden && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
+                  <EyeOff className="h-3 w-3" />
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1 mb-2 items-center">
+              {ticketLabels.map((tagName) => {
+                const label = labelByName.get(tagName);
+                return (
+                  <LabelBadge
+                    key={tagName}
+                    name={tagName}
+                    color={label?.color || '#6b7280'}
+                    size="sm"
+                    onRemove={() => onRemoveLabel(ticket.id, tagName)}
+                  />
+                );
+              })}
+              {availableLabelsForTicket.length > 0 && (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        className="h-5 w-5 flex items-center justify-center rounded-full border border-dashed border-muted-foreground/30 text-muted-foreground hover:border-primary hover:text-primary transition-colors"
+                        title="Add label"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-1" align="start">
+                      {availableLabelsForTicket.map((label) => (
+                        <button
+                          key={label.id}
+                          onClick={() => onAddLabel(ticket.id, label.name)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted transition-colors text-left"
+                        >
+                          <span
+                            className="w-3 h-3 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: label.color }}
+                          />
+                          <span className="truncate">{label.name}</span>
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              #{ticket.id} - {ticket.reportedByName || ticket.reportedBy} - {formatTimeAgo(ticket.date)}
+            </div>
+            {assigneeDisplay && (
+              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                <User className="h-3 w-3" />
+                {assigneeDisplay}
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
+TicketCard.displayName = 'TicketCard';
+
+const TableLoadingSkeleton = () => (
+  <div className="divide-y divide-border">
+    {Array.from({ length: 5 }).map((_, i) => (
+      <div key={i} className="flex items-center gap-3 px-3 py-4">
+        <Skeleton className="h-5 w-5 flex-shrink-0" />
+        <Skeleton className="h-4 w-4 rounded-full flex-shrink-0" />
+        <div className="flex-1 min-w-0 space-y-2">
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-3 w-1/3" />
+        </div>
+        <Skeleton className="h-4 w-24 hidden md:block" />
+        <Skeleton className="h-4 w-16 hidden md:block" />
+      </div>
+    ))}
+  </div>
+);
+
+const Tickets = () => {
+  const [, setLocation] = useLocation();
+  const isMobile = useIsMobile();
+  const { toast } = useToast();
+  const { t } = useTranslation();
+
+  // State for filters
+  const [statusFilter, setStatusFilter] = useState<'open' | 'closed'>('open');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [authorFilter, setAuthorFilter] = useState<string[]>([]);
+  const [labelFilters, setLabelFilters] = useState<string[]>([]);
+  const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
+  const [typeFilter, setTypeFilter] = useState<string[]>([]);
+  const [sortOption, setSortOption] = useState('newest');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Multi-select state
+  const [selectedTickets, setSelectedTickets] = useState<Set<string>>(new Set());
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const resetPageAndSelection = useCallback(() => {
+    setCurrentPage(1);
+    setSelectedTickets(new Set());
+  }, []);
+
+  const handleStatusFilter = useCallback((status: 'open' | 'closed') => {
+    setStatusFilter(status);
+    resetPageAndSelection();
+  }, [resetPageAndSelection]);
+
+  const handleLabelFiltersChange = useCallback((value: string[]) => {
+    setLabelFilters(value);
+    resetPageAndSelection();
+  }, [resetPageAndSelection]);
+
+  const handleAssigneeFilterChange = useCallback((value: string[]) => {
+    setAssigneeFilter(value);
+    resetPageAndSelection();
+  }, [resetPageAndSelection]);
+
+  const handleTypeFilterChange = useCallback((value: string[]) => {
+    setTypeFilter(value);
+    resetPageAndSelection();
+  }, [resetPageAndSelection]);
+
+  const handleSortChange = useCallback((value: string) => {
+    setSortOption(value);
+    resetPageAndSelection();
+  }, [resetPageAndSelection]);
+
+  // Fetch data
+  const { data: ticketsResponse, isLoading, refetch } = useTickets({
+    page: currentPage,
+    limit: 25,
+    search: debouncedSearchQuery,
+    status: statusFilter,
+    types: typeFilter,
+    author: authorFilter.length === 1 ? authorFilter[0] : '',
+    labels: labelFilters,
+    assignees: assigneeFilter,
+    sort: sortOption,
+  });
+
+  const { data: statusCounts } = useTicketStatusCounts({
+    search: debouncedSearchQuery,
+    types: typeFilter,
+    author: authorFilter.length === 1 ? authorFilter[0] : '',
+    labels: labelFilters,
+    assignees: assigneeFilter,
+  });
+
+  const { data: labelsData } = useLabels();
+  const { data: staffData } = useStaff();
+  const bulkUpdateMutation = useBulkUpdateTickets();
+  const addTagMutation = useAddTicketTag();
+  const removeTagMutation = useRemoveTicketTag();
+
+  const tickets: Ticket[] = (ticketsResponse?.tickets || []) as unknown as Ticket[];
+  const pagination = ticketsResponse?.pagination || {
+    current: 1,
+    total: 1,
+    totalTickets: 0,
+    hasNext: false,
+    hasPrev: false,
+  };
+
+  const labels: Label[] = labelsData || [];
+
+  const labelByName = useMemo(() => {
+    const map = new Map<string, Label>();
+    for (const label of labels) {
+      map.set(label.name, label);
+    }
+    return map;
+  }, [labels]);
+
+  const labelFilterOptions = useMemo(
+    () => labels.map((l) => ({ value: l.name, label: l.name, color: l.color })),
+    [labels]
+  );
+
+  const staffMembers = useMemo(
+    () => (staffData || []).map((s) => ({
+      value: s.username || s.email?.split('@')[0] || '',
+      label: s.username || s.email?.split('@')[0] || 'Unknown',
+    })),
+    [staffData]
+  );
+
+  const assigneeFilterOptions = useMemo(
+    () => [{ value: 'none', label: t('tickets.unassigned') }, ...staffMembers],
+    [staffMembers, t]
+  );
+
+  const hasActiveFilters =
+    debouncedSearchQuery.length > 0 ||
+    authorFilter.length > 0 ||
+    labelFilters.length > 0 ||
+    assigneeFilter.length > 0 ||
+    typeFilter.length > 0;
+
+  const clearAllFilters = useCallback(() => {
+    setSearchQuery('');
+    setDebouncedSearchQuery('');
+    setAuthorFilter([]);
+    setLabelFilters([]);
+    setAssigneeFilter([]);
+    setTypeFilter([]);
+    setCurrentPage(1);
+    setSelectedTickets(new Set());
+  }, []);
+
+  // Selection handlers
+  const handleSelectAll = () => {
+    if (selectedTickets.size === tickets.length) {
+      setSelectedTickets(new Set());
+    } else {
+      setSelectedTickets(new Set(tickets.map((t) => t.id)));
+    }
+  };
+
+  const handleSelectTicket = useCallback((ticketId: string) => {
+    setSelectedTickets((prev) => {
+      const next = new Set(prev);
+      if (next.has(ticketId)) {
+        next.delete(ticketId);
+      } else {
+        next.add(ticketId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Bulk action handlers
+  const handleBulkMarkAs = async (status: 'open' | 'closed') => {
+    try {
+      await bulkUpdateMutation.mutateAsync({
+        ticketIds: Array.from(selectedTickets),
+        locked: status === 'closed',
+      });
+      toast({ title: t('toast.success'), description: t('tickets.bulkMarkedAs', { count: selectedTickets.size, status }) });
+      setSelectedTickets(new Set());
+      refetch();
+    } catch (error) {
+      toast({ title: t('toast.error'), description: t('tickets.bulkMarkFailed', { status }), variant: 'destructive' });
+    }
+  };
+
+  const handleBulkAddLabels = async (labelsToAdd: string[]) => {
+    try {
+      await bulkUpdateMutation.mutateAsync({
+        ticketIds: Array.from(selectedTickets),
+        addLabels: labelsToAdd,
+      });
+      toast({ title: t('toast.success'), description: t('tickets.bulkLabelsAdded', { count: selectedTickets.size }) });
+      setSelectedTickets(new Set());
+      refetch();
+    } catch (error) {
+      toast({ title: t('toast.error'), description: t('tickets.bulkLabelsFailed'), variant: 'destructive' });
+    }
+  };
+
+  const handleBulkAssign = async (assignees: string[]) => {
+    try {
+      await bulkUpdateMutation.mutateAsync({
+        ticketIds: Array.from(selectedTickets),
+        assignTo: assignees.join(','),
+      });
+      toast({ title: t('toast.success'), description: t('tickets.bulkAssigned', { ticketCount: selectedTickets.size, staffCount: assignees.length }) });
+      setSelectedTickets(new Set());
+      refetch();
+    } catch (error) {
+      toast({ title: t('toast.error'), description: t('tickets.bulkAssignFailed'), variant: 'destructive' });
+    }
+  };
+
+  const handleNavigateToTicket = useCallback((ticketId: string) => {
+    if (!ticketId || typeof ticketId !== 'string') return;
+    const safeTicketId = ticketId.replace('#', 'ID-');
+    setTimeout(() => setLocation(`/panel/tickets/${safeTicketId}`), 50);
+  }, [setLocation]);
+
+  // Inline label handlers
+  const handleAddLabel = useCallback(async (ticketId: string, labelName: string) => {
+    try {
+      await addTagMutation.mutateAsync({ id: ticketId, tag: labelName });
+    } catch (error) {
+      toast({ title: t('toast.error'), description: t('tickets.addLabelFailed'), variant: 'destructive' });
+    }
+  }, [addTagMutation, toast, t]);
+
+  const handleRemoveLabel = useCallback(async (ticketId: string, labelName: string) => {
+    try {
+      await removeTagMutation.mutateAsync({ id: ticketId, tag: labelName });
+    } catch (error) {
+      toast({ title: t('toast.error'), description: t('tickets.removeLabelFailed'), variant: 'destructive' });
+    }
+  }, [removeTagMutation, toast, t]);
+
+  // Toggle type filter
+  const toggleTypeFilter = (typeValue: string) => {
+    if (typeFilter.includes(typeValue)) {
+      handleTypeFilterChange(typeFilter.filter(t => t !== typeValue));
+    } else {
+      handleTypeFilterChange([...typeFilter, typeValue]);
+    }
+  };
+
+  // Type filter options
+  const typeOptions = [
+    { value: 'support', label: t('tickets.support') },
+    { value: 'bug', label: t('tickets.bugReport') },
+    { value: 'player', label: t('tickets.playerReport') },
+    { value: 'chat', label: t('tickets.chatReport') },
+    { value: 'appeal', label: t('tickets.banAppeal') },
+    { value: 'staff', label: t('tickets.staffApplication') },
+  ];
+
+  // Sort options
+  const sortOptions = [
+    { value: 'newest', label: t('tickets.newest') },
+    { value: 'oldest', label: t('tickets.oldest') },
+    { value: 'recently-updated', label: t('tickets.recentlyUpdated') },
+    { value: 'least-recently-updated', label: t('tickets.leastRecentlyUpdated') },
+  ];
+
+  return (
+    <PageContainer>
+      <div className="flex flex-col space-y-4">
+        {/* Header */}
+        <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center">
+          <h2 className="text-xl font-semibold">{t('tickets.title')}</h2>
+          <div className="relative w-full md:w-80">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={t('tickets.searchTickets')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+        </div>
+
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-border pb-4">
+          {/* Status tabs */}
+          <div className="flex items-center gap-1 mr-2">
+            <Button
+              variant={statusFilter === 'open' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => handleStatusFilter('open')}
+              className="h-8"
+            >
+              <CircleDot className="h-4 w-4 mr-1.5 text-green-500" />
+              {statusCounts?.open ?? 0} {t('status.open')}
+            </Button>
+            <Button
+              variant={statusFilter === 'closed' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => handleStatusFilter('closed')}
+              className="h-8"
+            >
+              <CheckCircle2 className="h-4 w-4 mr-1.5 text-purple-500" />
+              {statusCounts?.closed ?? 0} {t('status.closed')}
+            </Button>
+          </div>
+
+          <div className="h-6 w-px bg-border mx-1" />
+
+          {/* Filter dropdowns */}
+          <FilterDropdown
+            label={t('tickets.label')}
+            options={labelFilterOptions}
+            selected={labelFilters}
+            onChange={handleLabelFiltersChange}
+            multiSelect
+          />
+
+          <FilterDropdown
+            label={t('tickets.assignee')}
+            options={assigneeFilterOptions}
+            selected={assigneeFilter}
+            onChange={handleAssigneeFilterChange}
+            multiSelect
+          />
+
+          <div className="flex-1" />
+
+          {/* Type filter buttons - hidden on mobile, shown on larger screens */}
+          <div className="hidden md:flex items-center gap-0 border border-border rounded-md overflow-hidden">
+            {typeOptions.map((opt, index) => (
+              <Button
+                key={opt.value}
+                variant={typeFilter.includes(opt.value) ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => toggleTypeFilter(opt.value)}
+                className={`h-8 px-2.5 text-xs rounded-none ${index < typeOptions.length - 1 ? 'border-r border-border' : ''}`}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </div>
+
+          {/* Type dropdown for mobile */}
+          <div className="md:hidden">
+            <FilterDropdown
+              label={t('table.type')}
+              options={typeOptions}
+              selected={typeFilter}
+              onChange={handleTypeFilterChange}
+              multiSelect
+            />
+          </div>
+
+          <div className="h-6 w-px bg-border mx-1 hidden md:block" />
+
+          {/* Sort */}
+          <Select value={sortOption} onValueChange={handleSortChange}>
+            <SelectTrigger className="w-[180px] h-8">
+              <SortAsc className="h-3.5 w-3.5 mr-1.5" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {sortOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Bulk action bar */}
+        {selectedTickets.size > 0 && (
+          <BulkActionBar
+            selectedCount={selectedTickets.size}
+            onClearSelection={() => setSelectedTickets(new Set())}
+            onMarkAs={handleBulkMarkAs}
+            onAddLabels={handleBulkAddLabels}
+            onAssign={handleBulkAssign}
+            availableLabels={labels}
+            staffMembers={staffMembers}
+            isLoading={bulkUpdateMutation.isPending}
+          />
+        )}
+
+        {/* Ticket list */}
+        <Card className="shadow-card">
+          <CardContent className="p-0">
+            {isLoading ? (
+              <TableLoadingSkeleton />
+            ) : tickets.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-12 text-muted-foreground">
+                <span>{t('tickets.noTickets')}</span>
+                {hasActiveFilters && (
+                  <Button variant="outline" size="sm" onClick={clearAllFilters}>
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            ) : isMobile ? (
+              <div className="p-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <Checkbox
+                    checked={selectedTickets.size === tickets.length && tickets.length > 0}
+                    onCheckedChange={handleSelectAll}
+                    className="h-5 w-5"
+                  />
+                  <span className="text-sm text-muted-foreground">{t('common.selectAll')}</span>
+                </div>
+                {tickets.map((ticket) => (
+                  <TicketCard
+                    key={ticket.id}
+                    ticket={ticket}
+                    isSelected={selectedTickets.has(ticket.id)}
+                    labels={labels}
+                    labelByName={labelByName}
+                    onSelect={handleSelectTicket}
+                    onNavigate={handleNavigateToTicket}
+                    onAddLabel={handleAddLabel}
+                    onRemoveLabel={handleRemoveLabel}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-12 px-3">
+                      <Checkbox
+                        checked={selectedTickets.size === tickets.length && tickets.length > 0}
+                        onCheckedChange={handleSelectAll}
+                        className="h-5 w-5"
+                      />
+                    </TableHead>
+                    <TableHead>{t('table.ticket')}</TableHead>
+                    <TableHead className="text-right">{t('table.assignee')}</TableHead>
+                    <TableHead className="text-right">{t('common.replies')}</TableHead>
+                    <TableHead className="text-right">{t('table.lastReply')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {tickets.map((ticket) => (
+                    <TicketRow
+                      key={ticket.id}
+                      ticket={ticket}
+                      isSelected={selectedTickets.has(ticket.id)}
+                      labels={labels}
+                      labelByName={labelByName}
+                      onSelect={handleSelectTicket}
+                      onNavigate={handleNavigateToTicket}
+                      onAddLabel={handleAddLabel}
+                      onRemoveLabel={handleRemoveLabel}
+                      ticketMetaLabel={t('tickets.ticketMeta', { id: ticket.id, timeAgo: formatTimeAgo(ticket.date), by: ticket.reportedByName || ticket.reportedBy })}
+                      hiddenLabel={t('tickets.hidden')}
+                      repliesCountLabel={t('common.replyCount', { count: ticket.replyCount || 0 })}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Pagination */}
+        {tickets.length > 0 && (
+          <div className="flex flex-col space-y-2 md:flex-row md:space-y-0 md:justify-between md:items-center">
+            <div className="text-sm text-muted-foreground text-center md:text-left">
+              {t('tickets.showingTickets', { from: ((pagination.current - 1) * 25) + 1, to: Math.min(pagination.current * 25, pagination.totalTickets), total: pagination.totalTickets })}
+            </div>
+            <div className="flex justify-center space-x-1">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!pagination.hasPrev}
+                onClick={() => setCurrentPage((p) => p - 1)}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              {Array.from({ length: Math.min(5, pagination.total) }, (_, i) => {
+                const page = Math.max(1, pagination.current - 2) + i;
+                if (page > pagination.total) return null;
+                return (
+                  <Button
+                    key={page}
+                    variant={page === pagination.current ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setCurrentPage(page)}
+                  >
+                    {page}
+                  </Button>
+                );
+              })}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!pagination.hasNext}
+                onClick={() => setCurrentPage((p) => p + 1)}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </PageContainer>
+  );
+};
+
+export default Tickets;

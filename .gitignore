@@ -1,0 +1,9 @@
+.env
+.env.*.local
+*.log
+backups/
+**/node_modules/
+**/dist/
+**/.gradle/
+**/build/
+**/uploads/

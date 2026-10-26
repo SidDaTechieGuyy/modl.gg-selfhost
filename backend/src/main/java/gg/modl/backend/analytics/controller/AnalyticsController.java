@@ -1,0 +1,80 @@
+package gg.modl.backend.analytics.controller;
+
+import gg.modl.backend.analytics.dto.response.AuditLogsAnalyticsResponse;
+import gg.modl.backend.analytics.dto.response.OverviewResponse;
+import gg.modl.backend.analytics.dto.response.PlayerActivityResponse;
+import gg.modl.backend.analytics.dto.response.PunishmentAnalyticsResponse;
+import gg.modl.backend.analytics.dto.response.TicketAnalyticsResponse;
+import gg.modl.backend.analytics.service.AnalyticsService;
+import gg.modl.backend.infrastructure.authorization.RequiresPanelPermission;
+import gg.modl.backend.infrastructure.rest.RESTMappingV1;
+import gg.modl.backend.infrastructure.rest.RequestUtil;
+import gg.modl.backend.server.data.Server;
+import gg.modl.proto.modl.v1.AnalyticsOverviewResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping(RESTMappingV1.PANEL_ANALYTICS)
+@RequiresPanelPermission("admin.audit.view.analytics")
+@RequiredArgsConstructor
+public class AnalyticsController {
+    private final AnalyticsService analyticsService;
+
+    @GetMapping("/overview")
+    public ResponseEntity<AnalyticsOverviewResponse> getOverview(HttpServletRequest request) {
+        final Server server = RequestUtil.getRequestServer(request);
+        final OverviewResponse overview = analyticsService.getOverview(server);
+
+        return ResponseEntity.ok(AnalyticsProtoMapper.toOverviewResponse(overview));
+    }
+
+    @GetMapping("/tickets")
+    public ResponseEntity<gg.modl.proto.modl.v1.TicketAnalyticsResponse> getTicketAnalytics(
+        @RequestParam(defaultValue = "30d") String period,
+        HttpServletRequest request
+    ) {
+        final Server server = RequestUtil.getRequestServer(request);
+        final TicketAnalyticsResponse analytics = analyticsService.getTicketAnalytics(server, period);
+
+        return ResponseEntity.ok(AnalyticsProtoMapper.toTicketAnalytics(analytics));
+    }
+
+    @GetMapping("/punishments")
+    public ResponseEntity<gg.modl.proto.modl.v1.PunishmentAnalyticsResponse> getPunishmentAnalytics(
+        @RequestParam(defaultValue = "30d") String period,
+        HttpServletRequest request
+    ) {
+        final Server server = RequestUtil.getRequestServer(request);
+        final PunishmentAnalyticsResponse analytics = analyticsService.getPunishmentAnalytics(server, period);
+
+        return ResponseEntity.ok(AnalyticsProtoMapper.toPunishmentAnalytics(analytics));
+    }
+
+    @GetMapping("/audit-logs")
+    public ResponseEntity<gg.modl.proto.modl.v1.AuditLogsAnalyticsResponse> getAuditLogsAnalytics(
+        @RequestParam(defaultValue = "7d") String period,
+        HttpServletRequest request
+    ) {
+        final Server server = RequestUtil.getRequestServer(request);
+        final AuditLogsAnalyticsResponse analytics = analyticsService.getAuditLogsAnalytics(server, period);
+
+        return ResponseEntity.ok(AnalyticsProtoMapper.toAuditLogsAnalytics(analytics));
+    }
+
+    @GetMapping("/player-activity")
+    public ResponseEntity<gg.modl.proto.modl.v1.PlayerActivityResponse> getPlayerActivityAnalytics(
+        @RequestParam(defaultValue = "30d") String period,
+        HttpServletRequest request
+    ) {
+        final Server server = RequestUtil.getRequestServer(request);
+        final PlayerActivityResponse analytics = analyticsService.getPlayerActivityAnalytics(server, period);
+
+        return ResponseEntity.ok(AnalyticsProtoMapper.toPlayerActivity(analytics));
+    }
+}

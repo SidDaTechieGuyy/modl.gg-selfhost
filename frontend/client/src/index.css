@@ -1,0 +1,351 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 220 6% 95%;
+  --foreground: 222.2 84% 4.9%;
+  --muted: 220 14% 92%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --primary: 207 90% 54%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 215 16% 94%;
+  --secondary-foreground: 222.2 84% 4.9%;
+  --accent: 273 68% 59%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --success: 142 71% 45%;
+  --success-foreground: 210 40% 98%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 210 40% 98%;
+  --info: 199 89% 48%;
+  --info-foreground: 210 40% 98%;
+  --ring: 222.2 84% 4.9%;
+  --radius: 0.75rem;
+  --radius-card: 1rem;
+  --radius-card-lg: 1.25rem;
+  --radius-pill: 9999px;
+
+  /* Surface depth layers: page(95%) → card(100%) → surface-2(95%) → surface-3(91%) */
+  --surface-1: 0 0% 100%;
+  --surface-2: 220 6% 95%;
+  --surface-3: 220 6% 91%;
+
+  /* Shadow hierarchy: inner → card → hover → elevated */
+  --shadow-card-inner: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06);
+  --shadow-card: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-card-hover: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-card-elevated: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+  --chart-1: 207 90% 54%;
+  --chart-2: 273 68% 59%;
+  --chart-3: 142 71% 45%;
+  --chart-4: 38 92% 50%;
+  --chart-5: 199 89% 48%;
+
+  --sidebar-background: 0 0% 98%;
+  --sidebar-foreground: 222.2 84% 4.9%;
+  --sidebar-primary: 207 90% 54%;
+  --sidebar-primary-foreground: 210 40% 98%;
+  --sidebar-accent: 273 68% 59%;
+  --sidebar-accent-foreground: 210 40% 98%;
+  --sidebar-border: 214.3 31.8% 91.4%;
+  --sidebar-ring: 207 90% 54%;
+}
+
+.dark {
+  --background: 240 10% 5.5%;
+  --foreground: 0 0% 98%;
+  --muted: 240 3.7% 17%;
+  --muted-foreground: 240 5% 64.9%;
+  --popover: 240 10% 13%;
+  --popover-foreground: 0 0% 98%;
+  --card: 240 10% 11%;
+  --card-foreground: 0 0% 98%;
+  --border: 240 3.7% 18%;
+
+  /* Surface depth layers: page(5.5%) → card/s1(11%) → s2(16%) → surface3(21%) */
+  --surface-1: 240 10% 11%;
+  --surface-2: 240 8% 16%;
+  --surface-3: 240 6% 21%;
+
+  --shadow-card-inner: 0 1px 3px 0 rgb(0 0 0 / 0.2), 0 1px 2px -1px rgb(0 0 0 / 0.15);
+  --shadow-card: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.25);
+  --shadow-card-hover: 0 10px 15px -3px rgb(0 0 0 / 0.35), 0 4px 6px -4px rgb(0 0 0 / 0.3);
+  --shadow-card-elevated: 0 20px 25px -5px rgb(0 0 0 / 0.4), 0 8px 10px -6px rgb(0 0 0 / 0.35);
+  --input: 240 3.7% 18%;
+  --primary: 207 90% 54%;
+  --primary-foreground: 211 100% 99%;
+  --secondary: 240 3.7% 17%;
+  --secondary-foreground: 0 0% 98%;
+  --accent: 273 68% 59%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 98%;
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 98%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 0 0% 98%;
+  --info: 199 89% 48%;
+  --info-foreground: 0 0% 98%;
+  --ring: 240 4.9% 83.9%;
+
+  --sidebar-background: 240 11% 8%;
+  --sidebar-foreground: 0 0% 98%;
+  --sidebar-primary: 207 90% 54%;
+  --sidebar-primary-foreground: 211 100% 99%;
+  --sidebar-accent: 273 68% 59%;
+  --sidebar-accent-foreground: 0 0% 98%;
+  --sidebar-border: 240 5% 18%;
+  --sidebar-ring: 207 90% 54%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+
+  *:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  }
+
+  /* Webkit scrollbar styles (Chrome, Safari, Edge) */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 4px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:active {
+    background: hsl(var(--muted-foreground) / 0.7);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-button {
+    display: none;
+    height: 0;
+    width: 0;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  /* Pill button utility */
+  .btn-pill {
+    border-radius: var(--radius-pill) !important;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+
+  /* Thicker progress bar override */
+  [role="progressbar"] {
+    height: 0.5rem !important;
+    border-radius: var(--radius-pill) !important;
+  }
+  [role="progressbar"] > div {
+    border-radius: var(--radius-pill) !important;
+  }
+
+  /* Thin scrollbar variant for compact areas */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    border-width: 1px;
+  }
+
+  /* Hidden scrollbar that still allows scrolling */
+  .scrollbar-hidden {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Safe area padding for notched phones */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  @keyframes slideRight {
+    from {
+      width: 0;
+      opacity: 0;
+    }
+    to {
+      width: 240px;
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideLeft {
+    from {
+      width: 240px;
+      opacity: 1;
+    }
+    to {
+      width: 0;
+      opacity: 0;
+    }
+  }
+
+  @keyframes shake {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-8px); }
+    50% { transform: translateX(8px); }
+    75% { transform: translateX(-4px); }
+    100% { transform: translateX(0); }
+  }
+
+  .animate-shake {
+    animation: shake 0.4s ease-in-out;
+    border-color: hsl(var(--warning)) !important;
+  }
+
+  .animate-slide-right {
+    animation: slideRight 0.3s ease forwards;
+  }
+
+  .animate-slide-left {
+    animation: slideLeft 0.3s ease forwards;
+  }
+
+  .sidebar-collapsed {
+    @apply w-[72px];
+  }
+
+  .sidebar-expanded {
+    @apply w-[240px];
+  }
+
+  .sidebar-expanded-only {
+    @apply block;
+  }
+
+  .sidebar-collapsed .sidebar-expanded-only {
+    @apply hidden;
+  }
+
+  .sidebar-collapsed-only {
+    @apply hidden;
+  }
+
+  .sidebar-collapsed .sidebar-collapsed-only {
+    @apply block;
+  }
+
+  .window-header {
+    @apply cursor-move;
+  }
+
+  .resizable-window {
+    @apply fixed rounded-card shadow-card-elevated overflow-hidden z-50 resize;
+    min-width: 600px;
+    min-height: 400px;
+    max-width: 90vw;
+    max-height: 80vh;
+  }
+
+  /* Markdown content dark mode enhancements */
+  .dark .prose {
+    @apply text-foreground;
+  }
+
+  .dark .prose h1,
+  .dark .prose h2,
+  .dark .prose h3,
+  .dark .prose h4,
+  .dark .prose h5,
+  .dark .prose h6 {
+    @apply text-foreground;
+  }
+
+  .dark .prose p,
+  .dark .prose li,
+  .dark .prose blockquote,
+  .dark .prose td,
+  .dark .prose th {
+    @apply text-foreground;
+  }
+
+  .dark .prose code {
+    @apply bg-muted text-foreground px-1 py-0.5 rounded;
+  }
+
+  .dark .prose pre {
+    @apply bg-muted border border-border;
+  }
+
+  .dark .prose pre code {
+    @apply bg-transparent px-0 py-0;
+  }
+
+  .dark .prose blockquote {
+    @apply border-l-border text-muted-foreground;
+  }
+
+  .dark .prose table {
+    @apply border-border;
+  }
+
+  .dark .prose thead th {
+    @apply border-b-border bg-muted;
+  }
+
+  .dark .prose tbody td {
+    @apply border-t-border;
+  }
+
+  .dark .prose a {
+    @apply text-primary hover:text-primary/80;
+  }
+
+  .dark .prose hr {
+    @apply border-border;
+  }
+}
+
+@layer utilities {
+  .shadow-card-inner { box-shadow: var(--shadow-card-inner); }
+  .shadow-card { box-shadow: var(--shadow-card); }
+  .shadow-card-hover { box-shadow: var(--shadow-card-hover); }
+  .shadow-card-elevated { box-shadow: var(--shadow-card-elevated); }
+}

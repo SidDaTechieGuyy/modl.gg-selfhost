@@ -1,0 +1,328 @@
+import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Database, Download, AlertCircle, CheckCircle2, Clock, Upload, Loader2, X } from 'lucide-react';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@modl-gg/shared-web/components/ui/select';
+import { StatusBanner } from '@modl-gg/shared-web/components/ui/status-banner';
+import { Progress } from '@modl-gg/shared-web/components/ui/progress';
+import { Card } from '@modl-gg/shared-web/components/ui/card';
+import { useMigrationStatus, useStartMigration, useCancelMigration } from '@/hooks/use-data';
+
+const MIGRATION_TYPES = [
+  { value: 'LiteBans', label: 'LiteBans (Spigot/Velocity/BungeeCord)' }
+];
+
+type MigrationRecord = NonNullable<NonNullable<ReturnType<typeof useMigrationStatus>['data']>['currentMigration']>;
+
+const MigrationTool: React.FC = () => {
+  const { t } = useTranslation();
+  const [selectedType, setSelectedType] = useState<string>('');
+  const [showCompletedAlert, setShowCompletedAlert] = useState(false);
+  const [lastCompletedMigration, setLastCompletedMigration] = useState<MigrationRecord | null>(null);
+  
+  const { data: migrationStatus, isLoading: statusLoading } = useMigrationStatus();
+  const startMigration = useStartMigration();
+  const cancelMigration = useCancelMigration();
+
+  const currentMigration = migrationStatus?.currentMigration;
+  const isActive = currentMigration && 
+    currentMigration.status !== 'completed' && 
+    currentMigration.status !== 'failed';
+  const onCooldown = migrationStatus?.cooldown?.onCooldown;
+  const cooldownRemainingMs = migrationStatus?.cooldown?.remainingTime || 0;
+  
+  // Track when migration completes and show alert
+  useEffect(() => {
+    if (currentMigration && 
+        (currentMigration.status === 'completed' || currentMigration.status === 'failed')) {
+      setShowCompletedAlert(true);
+      setLastCompletedMigration(currentMigration);
+      
+      // Auto-hide the alert after 10 seconds
+      const timer = setTimeout(() => {
+        setShowCompletedAlert(false);
+      }, 10000);
+      
+      return () => clearTimeout(timer);
+    }
+    
+    return undefined;
+  }, [currentMigration?.taskId, currentMigration?.status]);
+  
+  const handleStartMigration = async () => {
+    if (!selectedType || onCooldown || isActive) return;
+    
+    // Hide any previous completion alert
+    setShowCompletedAlert(false);
+    setLastCompletedMigration(null);
+    
+    try {
+      await startMigration.mutateAsync({ migrationType: selectedType });
+      setSelectedType('');
+    } catch (error) {
+      // Error handled by the mutation's onError callback
+    }
+  };
+
+  const handleCancelMigration = async () => {
+    if (!isActive) return;
+    
+    try {
+      await cancelMigration.mutateAsync();
+    } catch (error) {
+      // Error handled by the mutation's onError callback
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'idle':
+      case 'building_json':
+        return <Download className="h-5 w-5 text-info animate-pulse" />;
+      case 'uploading_json':
+        return <Upload className="h-5 w-5 text-info animate-pulse" />;
+      case 'processing_data':
+        return <Loader2 className="h-5 w-5 text-info animate-spin" />;
+      case 'completed':
+        return <CheckCircle2 className="h-5 w-5 text-success" />;
+      case 'failed':
+        return <AlertCircle className="h-5 w-5 text-destructive" />;
+      default:
+        return <Clock className="h-5 w-5 text-muted-foreground" />;
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'idle':
+        return t('settings.migration.statusConnecting');
+      case 'building_json':
+        return t('settings.migration.statusBuildingJson');
+      case 'uploading_json':
+        return t('settings.migration.statusUploading');
+      case 'processing_data':
+        return t('settings.migration.statusProcessing');
+      case 'completed':
+        return t('settings.migration.statusCompleted');
+      case 'failed':
+        return t('settings.migration.statusFailed', { type: currentMigration?.type });
+      default:
+        return t('settings.migration.statusUnknown');
+    }
+  };
+
+  const getProgressPercentage = (status: string, progress?: MigrationRecord['progress']) => {
+    // A completed migration is always 100%, regardless of how many records
+    // were skipped vs processed.
+    if (status === 'completed') {
+      return 100;
+    }
+
+    if (progress?.totalRecords) {
+      // Skipped records (duplicates/invalid) still represent progress through
+      // the source set, so count them alongside processed records; otherwise a
+      // run with many skips would stall the bar below 100%.
+      const handled = (progress.recordsProcessed ?? 0) + (progress.recordsSkipped ?? 0);
+      return Math.min(100, Math.round((handled / progress.totalRecords) * 100));
+    }
+
+    switch (status) {
+      case 'idle':
+        return 5;
+      case 'building_json':
+        return 25;
+      case 'uploading_json':
+        return 50;
+      case 'processing_data':
+        return 75;
+      case 'completed':
+        return 100;
+      default:
+        return 0;
+    }
+  };
+
+  const formatCooldownTime = (ms: number) => {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    return `${hours}h ${minutes}m`;
+  };
+
+  if (statusLoading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Migration Tool Header */}
+      <div>
+        <h4 className="text-base font-medium mb-2 flex items-center">
+          <Database className="h-4 w-4 mr-2" />
+          {t('settings.migration.dataMigration')}
+        </h4>
+        <p className="text-sm text-muted-foreground">
+          {t('settings.migration.dataMigrationDesc')}
+        </p>
+      </div>
+
+      {/* Active Migration Progress */}
+      {isActive && currentMigration && (
+        <Card className="p-4 border-info/50 bg-info/5">
+          <div className="space-y-4">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center space-x-3">
+                {getStatusIcon(currentMigration.status)}
+                <div>
+                  <p className="font-medium">{getStatusText(currentMigration.status)}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('settings.migration.migratingFrom', { type: currentMigration.type })}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleCancelMigration}
+                disabled={cancelMigration.isPending}
+              >
+                {cancelMigration.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <X className="h-4 w-4 mr-1" />
+                    {t('common.cancel')}
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {currentMigration.progress && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{currentMigration.progress.message}</span>
+                  <span className="font-medium">
+                    {getProgressPercentage(currentMigration.status, currentMigration.progress)}%
+                  </span>
+                </div>
+                <Progress value={getProgressPercentage(currentMigration.status, currentMigration.progress)} />
+                
+                {currentMigration.progress.recordsProcessed !== undefined && (
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>
+                      {t('settings.migration.processed', { count: currentMigration.progress.recordsProcessed })}
+                      {currentMigration.progress.totalRecords && ` / ${currentMigration.progress.totalRecords}`}
+                    </span>
+                    {(currentMigration.progress.recordsSkipped ?? 0) > 0 && (
+                      <span className="text-warning">
+                        {t('settings.migration.skipped', { count: currentMigration.progress.recordsSkipped })}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {currentMigration.error && (
+              <StatusBanner variant="error">
+                {currentMigration.error}
+              </StatusBanner>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {showCompletedAlert && lastCompletedMigration && (() => {
+        const lowerError = lastCompletedMigration.error?.toLowerCase() ?? '';
+        const isCancelled = lowerError.includes('cancelled') || lowerError.includes('canceled');
+        const isSuccess = lastCompletedMigration.status === 'completed';
+        const variant = isSuccess ? 'success' : (isCancelled ? 'warning' : 'error');
+
+        return (
+          <StatusBanner
+            variant={variant}
+            icon={isSuccess ? (
+              <CheckCircle2 className="h-5 w-5 text-success" />
+            ) : isCancelled ? (
+              <X className="h-5 w-5 text-warning" />
+            ) : undefined}
+          >
+            {isSuccess ? (
+              <>
+                {t('settings.migration.migrationCompletedSuccess')}
+                {lastCompletedMigration.progress && (
+                  <span className="ml-1">
+                    {t('settings.migration.processedRecords', { count: lastCompletedMigration.progress.recordsProcessed })}
+                    {(lastCompletedMigration.progress.recordsSkipped ?? 0) > 0 &&
+                      t('settings.migration.skippedSuffix', { count: lastCompletedMigration.progress.recordsSkipped })}.
+                  </span>
+                )}
+              </>
+            ) : isCancelled ? (
+              t('settings.migration.migrationCancelled')
+            ) : (
+              lastCompletedMigration.error || t('settings.migration.migrationFailed')
+            )}
+          </StatusBanner>
+        );
+      })()}
+
+      {onCooldown && !isActive && (
+        <StatusBanner
+          variant="info"
+          icon={<Clock className="h-5 w-5 text-info" />}
+        >
+          {t('settings.migration.cooldownActive', { time: formatCooldownTime(cooldownRemainingMs) })}
+        </StatusBanner>
+      )}
+
+      {/* Migration Start Controls */}
+      {!isActive && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">{t('settings.migration.migrationType')}</label>
+            <Select value={selectedType} onValueChange={setSelectedType}>
+              <SelectTrigger>
+                <SelectValue placeholder={t('settings.migration.selectMigrationType')} />
+              </SelectTrigger>
+              <SelectContent>
+                {MIGRATION_TYPES.map((type) => (
+                  <SelectItem key={type.value} value={type.value}>
+                    {type.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {t('settings.migration.selectSystemHelp')}
+            </p>
+          </div>
+
+          <Button
+            onClick={handleStartMigration}
+            disabled={!selectedType || onCooldown || startMigration.isPending}
+            className="w-full"
+          >
+            {startMigration.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                {t('settings.migration.startingMigration')}
+              </>
+            ) : (
+              <>
+                <Database className="h-4 w-4 mr-2" />
+                {t('settings.migration.startMigration')}
+              </>
+            )}
+          </Button>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default MigrationTool;

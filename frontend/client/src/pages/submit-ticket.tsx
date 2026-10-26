@@ -1,0 +1,886 @@
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useLocation, useParams } from 'wouter';
+import {
+  Bug,
+  HelpCircle,
+  User,
+  Loader2,
+  CheckSquare,
+  ArrowLeft,
+} from 'lucide-react';
+import { apiFetch } from '@/lib/api';
+import { Button } from "@modl-gg/shared-web/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@modl-gg/shared-web/components/ui/card";
+import { Input } from "@modl-gg/shared-web/components/ui/input";
+import { Label } from "@modl-gg/shared-web/components/ui/label";
+import { Textarea } from "@modl-gg/shared-web/components/ui/textarea";
+import { Checkbox } from "@modl-gg/shared-web/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@modl-gg/shared-web/components/ui/select";
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { useSettings } from "@/hooks/use-data";
+import MediaUpload from '@/components/MediaUpload';
+import { getCreatorIdentifier } from '@/utils/creator-verification';
+import { useMediaUpload } from '@/hooks/use-media-upload';
+import { getApiErrorMessage, isValidEmail, normalizeEmail } from '@/utils/email-validation';
+import { Notice } from '@/components/ui/notice';
+
+// Map URL types to internal ticket types
+const typeMapping: Record<string, string> = {
+  'support': 'support',
+  'bug': 'bug',
+  'staff': 'staff',
+  'application': 'staff',
+  'apply': 'staff',
+};
+
+interface FormField {
+  id: string;
+  label: string;
+  type: 'text' | 'textarea' | 'dropdown' | 'multiple_choice' | 'checkbox' | 'file_upload' | 'checkboxes' | 'description';
+  description?: string;
+  required: boolean;
+  options?: string[];
+  order: number;
+  sectionId?: string;
+  goToSection?: string;
+  optionSectionMapping?: Record<string, string>;
+}
+
+interface FormSection {
+  id: string;
+  title: string;
+  description?: string;
+  order: number;
+  showIfFieldId?: string;
+  showIfValue?: string;
+  showIfValues?: string[];
+  hideByDefault?: boolean;
+}
+
+interface TicketFormConfig {
+  fields?: FormField[];
+  sections?: FormSection[];
+  requireEmail?: boolean;
+}
+
+const SubmitTicketPage = () => {
+  const [, setLocation] = useLocation();
+  const { type: urlType } = useParams<{ type?: string }>();
+  const { toast } = useToast();
+  const { t } = useTranslation();
+
+  const ticketTypes = [
+    { id: 'support', label: t('submitTicket.supportRequest'), icon: HelpCircle, description: t('submitTicket.supportRequestDesc'), apiType: 'support' },
+    { id: 'bug', label: t('submitTicket.bugReport'), icon: Bug, description: t('submitTicket.bugReportDesc'), apiType: 'bug' },
+    { id: 'staff', label: t('submitTicket.staffApplication'), icon: User, description: t('submitTicket.staffApplicationDesc'), apiType: 'staff' },
+  ];
+
+  const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formSubject, setFormSubject] = useState('');
+  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [formPendingFiles, setFormPendingFiles] = useState<Record<string, File[]>>({});
+  const [displayName, setDisplayName] = useState('');
+  const { uploadMedia } = useMediaUpload();
+
+  // Fetch settings to get form templates
+  const { data: settingsData, isLoading: isLoadingSettings } = useSettings();
+
+  // Handle type selection from URL
+  const effectiveType = selectedType || (urlType ? typeMapping[urlType.toLowerCase()] : null);
+  const apiTicketType = effectiveType === 'staff' ? 'application' : effectiveType;
+
+  // Handle form field changes
+  const handleFormFieldChange = (name: string, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  // Handle form submission - creates the ticket
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!effectiveType) return;
+
+    // For staff/application forms, auto-generate the subject
+    const finalSubject = (effectiveType === 'staff' || effectiveType === 'application')
+      ? `${displayName.trim() || 'User'}'s Staff Application`
+      : formSubject.trim();
+
+    // Check if subject is required for non-application tickets
+    if (effectiveType !== 'staff' && effectiveType !== 'application' && !finalSubject) {
+      toast({
+        title: t('submitTicket.subjectRequired'),
+        description: t('submitTicket.subjectRequiredDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Get form configuration from settings
+    let formConfig: TicketFormConfig | null = null;
+    try {
+      if (settingsData?.settings) {
+        const ticketForms = settingsData.settings.ticketForms as Record<string, TicketFormConfig> | undefined;
+        const ticketTypeLower = effectiveType.toLowerCase();
+
+        if (ticketForms && ticketForms[ticketTypeLower]) {
+          formConfig = ticketForms[ticketTypeLower];
+        } else if (ticketForms && ticketForms[effectiveType]) {
+          formConfig = ticketForms[effectiveType];
+        } else if ((ticketTypeLower === 'staff' || ticketTypeLower === 'application') && ticketForms && ticketForms['application']) {
+          formConfig = ticketForms['application'];
+        }
+      }
+    } catch (error) {
+      console.error('Error processing form templates:', error);
+    }
+
+    if (!formConfig || !formConfig.fields) {
+      toast({
+        title: t('submitTicket.formConfigMissing'),
+        description: t('submitTicket.formConfigMissingDesc', { type: effectiveType }),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Get visible sections to validate only visible required fields
+    const visibleSections = new Set<string>();
+    const sectionDefinitions = formConfig.sections || [];
+
+    sectionDefinitions.forEach((section: FormSection) => {
+      if (!section.showIfFieldId && !section.hideByDefault) {
+        visibleSections.add(section.id);
+      }
+    });
+
+    sectionDefinitions.forEach((section: FormSection) => {
+      if (section.showIfFieldId) {
+        const triggerFieldValue = formData[section.showIfFieldId];
+        if (section.showIfValue && triggerFieldValue === section.showIfValue) {
+          visibleSections.add(section.id);
+        } else if (triggerFieldValue !== undefined && section.showIfValues && section.showIfValues.includes(triggerFieldValue)) {
+          visibleSections.add(section.id);
+        }
+      }
+    });
+
+    const allFields = formConfig.fields || [];
+    allFields.forEach((field: FormField) => {
+      const fieldValue = formData[field.id];
+      if (field.optionSectionMapping && fieldValue) {
+        if (field.type === 'dropdown' || field.type === 'multiple_choice') {
+          const targetSection = field.optionSectionMapping[fieldValue];
+          if (targetSection) {
+            visibleSections.add(targetSection);
+          }
+        } else if (field.type === 'checkbox') {
+          const targetSection = field.optionSectionMapping[fieldValue]
+            || (fieldValue === 'true' ? field.optionSectionMapping['true'] || field.optionSectionMapping['checked'] : undefined);
+          if (targetSection) {
+            visibleSections.add(targetSection);
+          }
+        } else if (field.type === 'checkboxes') {
+          const selectedValues = fieldValue.split(',').map((v: string) => v.trim()).filter((v: string) => v);
+          selectedValues.forEach((value: string) => {
+            const targetSection = field.optionSectionMapping![value];
+            if (targetSection) {
+              visibleSections.add(targetSection);
+            }
+          });
+        }
+      }
+    });
+
+    // Add email field to validation
+    const isEmailRequired = formConfig.requireEmail === true;
+    const showEmailField = true;
+    const emailField = {
+      id: 'email',
+      type: 'text' as const,
+      label: 'Email Address',
+      description: 'Your email address for response notifications',
+      required: isEmailRequired,
+      order: 1,
+      sectionId: undefined
+    };
+
+    const fieldsToValidate = showEmailField ? [emailField, ...(formConfig.fields || [])] : (formConfig.fields || []);
+
+    // Check display name
+    if (!displayName.trim()) {
+      toast({
+        title: t('submitTicket.nameRequired'),
+        description: t('submitTicket.nameRequiredDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Check required fields
+    for (const field of fieldsToValidate) {
+      if (field.sectionId && !visibleSections.has(field.sectionId)) {
+        continue;
+      }
+      if (field.type === 'description') {
+        continue;
+      }
+      const fieldValue = formData[field.id];
+      if (field.required && (!fieldValue || fieldValue.trim() === '')) {
+        toast({
+          title: t('submitTicket.requiredFieldMissing'),
+          description: t('submitTicket.requiredFieldMissingDesc', { label: field.label }),
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
+    // Validate email format
+    const email = normalizeEmail(formData['email'] || '');
+    if (isEmailRequired && !isValidEmail(email)) {
+      toast({
+        title: t('submitTicket.invalidEmail'),
+        description: t('submitTicket.invalidEmailDesc'),
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      // Keep field IDs as keys, send labels separately
+      const cleanFormData: Record<string, string> = {};
+      const fieldLabelsMapping: Record<string, string> = {};
+      const allFormFields = formConfig.fields || [];
+
+      for (const [fieldId, value] of Object.entries(formData)) {
+        const fieldConfig = allFormFields.find((f: FormField) => f.id === fieldId);
+        if (fieldConfig?.type === 'file_upload') {
+          continue;
+        }
+        cleanFormData[fieldId] = value;
+        if (fieldConfig && fieldConfig.label) {
+          fieldLabelsMapping[fieldId] = fieldConfig.label;
+        }
+      }
+
+      const visibleFileUploadFields = allFormFields.filter((field: FormField) => {
+        if (field.type !== 'file_upload') return false;
+        return !field.sectionId || visibleSections.has(field.sectionId);
+      });
+      const visibleFileFieldIds = new Set(visibleFileUploadFields.map((field: FormField) => field.id));
+
+      let hiddenExcludedFiles = 0;
+      for (const [fieldId, files] of Object.entries(formPendingFiles)) {
+        if (files.length > 0 && !visibleFileFieldIds.has(fieldId)) {
+          hiddenExcludedFiles += files.length;
+        }
+      }
+
+      const attachments: Array<{
+        url: string;
+        key: string;
+        fileName: string;
+        fileType: string;
+        fileSize: number;
+        fieldId: string;
+        fieldLabel?: string;
+      }> = [];
+
+      for (const field of visibleFileUploadFields) {
+        const files = formPendingFiles[field.id] || [];
+        for (const file of files) {
+          const result = await uploadMedia(file, 'ticket', {
+            ticketId: 'new',
+            ticketType: apiTicketType,
+            fieldId: field.id
+          });
+          attachments.push({
+            url: result.url,
+            key: result.key,
+            fileName: file.name,
+            fileType: file.type || 'application/octet-stream',
+            fileSize: file.size,
+            fieldId: field.id,
+            fieldLabel: field.label
+          });
+        }
+      }
+
+      // Generate a creator identifier for this submission
+      const tempTicketId = `temp-${Date.now()}`;
+      const creatorIdentifier = getCreatorIdentifier(tempTicketId);
+
+      // proto CreateTicketRequest.creator_name has max_len = 16, so send the trimmed display
+      // name truncated to that limit. (Web origin is conveyed server-side, not embedded here.)
+      const webCreatorName = displayName.trim().slice(0, 16);
+
+      if (hiddenExcludedFiles > 0) {
+        toast({
+          title: t('submitTicket.hiddenAttachmentsExcluded'),
+          description: t('submitTicket.hiddenAttachmentsExcludedDesc', { count: hiddenExcludedFiles }),
+        });
+      }
+
+      // Create the ticket with all data
+      const response = await apiFetch('/v1/public/tickets', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: apiTicketType,
+          subject: finalSubject,
+          creatorName: webCreatorName,
+          creatorEmail: email,
+          formData: cleanFormData,
+          fieldLabels: fieldLabelsMapping,
+          attachments,
+          creatorIdentifier: creatorIdentifier,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => null);
+        throw new Error(getApiErrorMessage(errorPayload, 'Failed to create ticket'));
+      }
+
+      const data = await response.json();
+
+      toast({
+        title: t('submitTicket.ticketSubmitted'),
+        description: t('submitTicket.ticketSubmittedDesc'),
+        variant: "default"
+      });
+
+      // Redirect to the ticket page
+      setLocation(`/ticket/${data.ticketId}`);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error && error.message ? error.message : 'Failed to create ticket',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Render the ticket form
+  const renderTicketForm = () => {
+    if (isLoadingSettings) {
+      return (
+        <div className="text-center py-8">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-primary" />
+          <p className="text-muted-foreground">{t('submitTicket.loadingForm')}</p>
+        </div>
+      );
+    }
+
+    if (!effectiveType) return null;
+
+    // Get form configuration from settings
+    let formConfig: TicketFormConfig | null = null;
+    try {
+      if (settingsData?.settings) {
+        const ticketForms = settingsData.settings.ticketForms as Record<string, TicketFormConfig> | undefined;
+        const ticketTypeLower = effectiveType.toLowerCase();
+
+        if (ticketForms && ticketForms[ticketTypeLower]) {
+          formConfig = ticketForms[ticketTypeLower];
+        } else if (ticketForms && ticketForms[effectiveType]) {
+          formConfig = ticketForms[effectiveType];
+        } else if ((ticketTypeLower === 'staff' || ticketTypeLower === 'application') && ticketForms && ticketForms['application']) {
+          formConfig = ticketForms['application'];
+        }
+      }
+    } catch (error) {
+      console.error('Error processing form templates:', error);
+    }
+
+    if (!formConfig || !formConfig.fields) {
+      return (
+        <Notice variant="error" title={t('submitTicket.formNotConfigured')}>
+          <p className="mb-2">{t('submitTicket.noFormConfig', { type: effectiveType })}</p>
+          <p className="text-xs opacity-80">{t('submitTicket.contactAdmin')}</p>
+        </Notice>
+      );
+    }
+
+    let fields = formConfig.fields || [];
+    const sectionDefinitions = formConfig.sections || [];
+
+    const isEmailRequiredForRender = formConfig.requireEmail === true;
+    const showEmailFieldForRender = true;
+
+    if (showEmailFieldForRender) {
+      const emailField = {
+        id: 'email',
+        type: 'text' as const,
+        label: 'Email Address',
+        description: isEmailRequiredForRender ? 'Your email address for response notifications' : 'Optionally provide your email to receive notifications',
+        required: isEmailRequiredForRender,
+        order: 2,
+        sectionId: undefined,
+        options: undefined
+      };
+
+      const adjustedFields = fields.map((field: FormField) => ({
+        ...field,
+        order: field.order >= 1 ? field.order + 2 : field.order
+      }));
+
+      fields = [emailField, ...adjustedFields].sort((a: FormField, b: FormField) => a.order - b.order);
+    }
+
+    if (fields.length === 0) {
+      return (
+        <Notice variant="warning" title={t('submitTicket.emptyFormConfig')}>
+          {t('submitTicket.emptyFormConfigDesc', { type: effectiveType })}
+        </Notice>
+      );
+    }
+
+    // Group fields by section
+    const fieldsBySection: { [key: string]: FormField[] } = {};
+    const fieldsWithoutSection: FormField[] = [];
+
+    fields.forEach((field: FormField) => {
+      if (field.sectionId) {
+        const sectionFields = fieldsBySection[field.sectionId] ?? (fieldsBySection[field.sectionId] = []);
+        sectionFields.push(field);
+      } else {
+        fieldsWithoutSection.push(field);
+      }
+    });
+
+    Object.values(fieldsBySection).forEach(sectionFields => {
+      sectionFields.sort((a, b) => a.order - b.order);
+    });
+
+    fieldsWithoutSection.sort((a, b) => a.order - b.order);
+
+    const getVisibleSections = (): Set<string> => {
+      const visibleSections = new Set<string>();
+
+      sectionDefinitions.forEach((section: FormSection) => {
+        if (!section.showIfFieldId && !section.hideByDefault) {
+          visibleSections.add(section.id);
+        }
+      });
+
+      sectionDefinitions.forEach((section: FormSection) => {
+        if (section.showIfFieldId) {
+          const triggerFieldValue = formData[section.showIfFieldId];
+          if (section.showIfValue && triggerFieldValue === section.showIfValue) {
+            visibleSections.add(section.id);
+          } else if (triggerFieldValue !== undefined && section.showIfValues && section.showIfValues.includes(triggerFieldValue)) {
+            visibleSections.add(section.id);
+          }
+        }
+      });
+
+      fields.forEach((field: FormField) => {
+        const fieldValue = formData[field.id];
+        if (field.optionSectionMapping && fieldValue) {
+          if (field.type === 'dropdown') {
+            const targetSection = field.optionSectionMapping[fieldValue];
+            if (targetSection) {
+              visibleSections.add(targetSection);
+            }
+          } else if (field.type === 'checkbox') {
+            const targetSection = field.optionSectionMapping[fieldValue]
+              || (fieldValue === 'true' ? field.optionSectionMapping['true'] || field.optionSectionMapping['checked'] : undefined);
+            if (targetSection) {
+              visibleSections.add(targetSection);
+            }
+          } else if (field.type === 'multiple_choice') {
+            const targetSection = field.optionSectionMapping[fieldValue];
+            if (targetSection) {
+              visibleSections.add(targetSection);
+            }
+          } else if (field.type === 'checkboxes') {
+            const selectedValues = fieldValue.split(',').map(v => v.trim()).filter(v => v);
+            selectedValues.forEach(value => {
+              const targetSection = field.optionSectionMapping![value];
+              if (targetSection) {
+                visibleSections.add(targetSection);
+              }
+            });
+          }
+        }
+      });
+
+      return visibleSections;
+    };
+
+    const visibleSections = getVisibleSections();
+
+    const renderField = (field: FormField) => {
+      if (field.type === 'description') {
+        return (
+          <div key={field.id} className="space-y-1">
+            {field.label && (
+              <Label className="font-medium">{field.label}</Label>
+            )}
+            {field.description && (
+              <p className="text-sm text-muted-foreground">{field.description}</p>
+            )}
+          </div>
+        );
+      }
+
+      return (
+        <div key={field.id} className="space-y-1">
+          {field.type !== 'checkbox' ?
+            <Label htmlFor={field.id} className="font-medium">
+              {field.label}
+              {field.required && <span className="text-destructive ml-1">*</span>}
+            </Label> : null
+          }
+
+          {field.description && (
+            <p className="text-sm text-muted-foreground mb-1">{field.description}</p>
+          )}
+
+          {field.type === 'textarea' ? (
+            <Textarea
+              id={field.id}
+              placeholder={`Enter ${field.label.toLowerCase()}`}
+              value={formData[field.id] || ''}
+              onChange={(e) => handleFormFieldChange(field.id, e.target.value)}
+              className={effectiveType === 'application' || effectiveType === 'staff' ?
+                (field.id === 'introduction' || field.id === 'server_perspective' || field.id === 'passion') ?
+                  "min-h-[180px]" : "min-h-[120px]"
+                : "min-h-[120px]"}
+              required={field.required}
+            />
+          ) : field.type === 'dropdown' ? (
+            <Select
+              value={formData[field.id] || ''}
+              onValueChange={(value) => handleFormFieldChange(field.id, value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder={`Select ${field.label.toLowerCase()}`} />
+              </SelectTrigger>
+              <SelectContent>
+                {field.options?.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : field.type === 'checkbox' ? (
+            <div className="flex items-start space-x-2 mt-2">
+              <Checkbox
+                id={field.id}
+                checked={formData[field.id] === "true"}
+                onCheckedChange={(checked: boolean) => handleFormFieldChange(field.id, checked ? "true" : "false")}
+                required={field.required}
+                className="mt-1"
+              />
+              <label
+                htmlFor={field.id}
+                className="text-sm font-normal leading-tight peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              >
+                {field.label}
+                {field.required && <span className="text-destructive ml-1">*</span>}
+              </label>
+            </div>
+          ) : field.type === 'multiple_choice' ? (
+            <div className="space-y-2">
+              {field.options?.map((option) => (
+                <div key={option} className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id={`${field.id}-${option}`}
+                    name={field.id}
+                    value={option}
+                    checked={formData[field.id] === option}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        handleFormFieldChange(field.id, option);
+                      }
+                    }}
+                    className="h-4 w-4 text-primary focus:ring-primary border-gray-300"
+                  />
+                  <label
+                    htmlFor={`${field.id}-${option}`}
+                    className="text-sm font-normal leading-tight peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                  >
+                    {option}
+                  </label>
+                </div>
+              ))}
+            </div>
+          ) : field.type === 'checkboxes' ? (
+            <div className="space-y-2">
+              {field.options?.map((option) => (
+                <div key={option} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`${field.id}-${option}`}
+                    checked={formData[field.id]?.includes(option) || false}
+                    onCheckedChange={(checked: boolean) => {
+                      const fieldValue = formData[field.id];
+                      const currentValues = fieldValue ? fieldValue.split(',') : [];
+                      if (checked) {
+                        const newValues = [...currentValues, option].filter(v => v.trim() !== '');
+                        handleFormFieldChange(field.id, newValues.join(','));
+                      } else {
+                        const newValues = currentValues.filter(v => v !== option);
+                        handleFormFieldChange(field.id, newValues.join(','));
+                      }
+                    }}
+                    className="mt-1"
+                  />
+                  <label
+                    htmlFor={`${field.id}-${option}`}
+                    className="text-sm font-normal leading-tight peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                  >
+                    {option}
+                  </label>
+                </div>
+              ))}
+            </div>
+          ) : field.type === 'file_upload' ? (
+            <div className="space-y-2">
+              <MediaUpload
+                uploadType="ticket"
+                autoUpload={false}
+                onFilesSelected={(files) => {
+                  const selected = files[0];
+                  if (!selected) return;
+                  handleFormFieldChange(field.id, selected.name);
+                  setFormPendingFiles((prev) => ({
+                    ...prev,
+                    [field.id]: [selected]
+                  }));
+                }}
+                metadata={{
+                  ticketId: 'new',
+                  ticketType: apiTicketType,
+                  fieldId: field.id
+                }}
+                variant="compact"
+                maxFiles={1}
+              />
+              {formPendingFiles[field.id]?.[0] ? (
+                <div className="text-sm text-muted-foreground">
+                  Selected file: {formPendingFiles[field.id]?.[0]?.name} (uploads on submit)
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <Input
+              id={field.id}
+              type={field.id === 'email' ? 'email' : 'text'}
+              placeholder={`Enter ${field.label.toLowerCase()}`}
+              value={formData[field.id] || ''}
+              onChange={(e) => handleFormFieldChange(field.id, e.target.value)}
+              required={field.required}
+            />
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <form onSubmit={handleFormSubmit} className="space-y-6">
+        <div className="space-y-4">
+          {/* Name field - always first */}
+          <div>
+            <Label htmlFor="displayName" className="font-medium">
+              {t('submitTicket.yourName')}
+              <span className="text-destructive ml-1">*</span>
+            </Label>
+            <p className="text-sm text-muted-foreground mb-1">
+              {t('submitTicket.yourNameDesc', { name: displayName || t('submitTicket.namePlaceholderExample') })}
+            </p>
+            <Input
+              id="displayName"
+              type="text"
+              placeholder={t('submitTicket.namePlaceholder')}
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              required
+            />
+          </div>
+
+          {effectiveType !== 'staff' && effectiveType !== 'application' && (
+            <div>
+              <Label htmlFor="subject" className="font-medium">{t('submitTicket.ticketSubject')}</Label>
+              <Input
+                id="subject"
+                type="text"
+                placeholder={t('submitTicket.ticketSubjectPlaceholder')}
+                value={formSubject}
+                onChange={(e) => setFormSubject(e.target.value)}
+                className="mt-1"
+                required
+              />
+            </div>
+          )}
+
+          {/* Render fields without sections first */}
+          {fieldsWithoutSection.map((field: FormField) => renderField(field))}
+
+          {/* Render sections in order - only show visible sections */}
+          {sectionDefinitions
+            .filter((section: FormSection) => visibleSections.has(section.id))
+            .sort((a: FormSection, b: FormSection) => a.order - b.order)
+            .map((section: FormSection) => {
+              const sectionFields = fieldsBySection[section.id] || [];
+              if (sectionFields.length === 0) return null;
+
+              return (
+                <div key={section.id} className="border rounded-lg p-4 space-y-4 bg-muted/20">
+                  <div className="border-b pb-2">
+                    <h3 className="font-medium text-lg">{section.title}</h3>
+                    {section.description && (
+                      <p className="text-sm text-muted-foreground mt-1">{section.description}</p>
+                    )}
+                  </div>
+                  {sectionFields.map((field: FormField) => renderField(field))}
+                </div>
+              );
+            })}
+
+        </div>
+
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            disabled={isSubmitting}
+            className="flex items-center"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {t('submitTicket.submitting')}
+              </>
+            ) : (
+              <>
+                <CheckSquare className="mr-2 h-4 w-4" />
+                {t('submitTicket.submitTicket')}
+              </>
+            )}
+          </Button>
+        </div>
+      </form>
+    );
+  };
+
+  // Get the title/description for selected type
+  const getFormHeader = () => {
+    if (!effectiveType) return null;
+
+    if (effectiveType === 'staff' || effectiveType === 'application') {
+      return {
+        title: t('submitTicket.staffApplication'),
+        description: t('submitTicket.staffApplicationFormDesc')
+      };
+    } else if (effectiveType === 'bug') {
+      return {
+        title: t('submitTicket.bugReport'),
+        description: t('submitTicket.bugFormDesc')
+      };
+    } else if (effectiveType === 'support') {
+      return {
+        title: t('submitTicket.supportRequest'),
+        description: t('submitTicket.supportFormDesc')
+      };
+    }
+    return {
+      title: `${effectiveType.charAt(0).toUpperCase() + effectiveType.slice(1)} Ticket`,
+      description: t('submitTicket.genericFormDesc')
+    };
+  };
+
+  // If type is provided in URL and it's valid, show the form directly
+  if (effectiveType && ticketTypes.some(t => t.id === effectiveType)) {
+    const header = getFormHeader();
+
+    return (
+      <div className="min-h-screen bg-background p-6">
+        <div className="max-w-5xl mx-auto">
+          {/* Security Disclaimer */}
+          <Notice variant="warning" title={t('submitTicket.securityNotice')} className="mb-6">
+            {t('submitTicket.securityNoticeDesc')}
+          </Notice>
+
+          <Card className="mb-6 shadow-card">
+            <CardHeader>
+              {!urlType && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedType(null)}
+                  className="w-fit mb-2 -ml-2"
+                >
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  {t('common.back')}
+                </Button>
+              )}
+              <CardTitle>{header?.title}</CardTitle>
+              <CardDescription className="mt-2">
+                {header?.description}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {renderTicketForm()}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // Type selection
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <Card className="w-full max-w-lg shadow-card">
+        <CardHeader className="text-center">
+          <CardTitle>{t('submitTicket.submitATicket')}</CardTitle>
+          <CardDescription>
+            {t('submitTicket.selectType')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {ticketTypes.map((type) => {
+            const Icon = type.icon;
+            return (
+              <Button
+                key={type.id}
+                variant="outline"
+                onClick={() => setSelectedType(type.id)}
+                className="w-full p-4 h-auto justify-start"
+              >
+                <div className="flex items-start gap-4 w-full">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <Icon className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-medium">{type.label}</p>
+                    <p className="text-sm text-muted-foreground font-normal">{type.description}</p>
+                  </div>
+                </div>
+              </Button>
+            );
+          })}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default SubmitTicketPage;

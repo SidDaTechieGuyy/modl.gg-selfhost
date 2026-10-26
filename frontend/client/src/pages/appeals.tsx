@@ -1,0 +1,1593 @@
+import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { z } from 'zod';
+import { useForm, type FieldPath } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import type { JsonValue } from '@bufbuild/protobuf';
+import { SearchIcon, ShieldCheck, ShieldX, Send, File, Image, Video, FileText, X } from 'lucide-react';
+import { formatDate } from '../utils/date-utils';
+import { apiFetch, getAvatarUrl } from '@/lib/api';
+import { Label } from "@modl-gg/shared-web/components/ui/label";
+import { Button } from "@modl-gg/shared-web/components/ui/button";
+import { Input } from "@modl-gg/shared-web/components/ui/input";
+import { Textarea } from "@modl-gg/shared-web/components/ui/textarea";
+import { Checkbox } from "@modl-gg/shared-web/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@modl-gg/shared-web/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@modl-gg/shared-web/components/ui/select";
+import MediaUpload from '@/components/MediaUpload';
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@modl-gg/shared-web/components/ui/form";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@modl-gg/shared-web/components/ui/card";
+import { StatusBanner } from "@modl-gg/shared-web/components/ui/status-banner";
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { Separator } from '@modl-gg/shared-web/components/ui/separator';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { useCreateAppeal, withAppealAuthToken } from '@/hooks/use-data';
+import { deriveAppealStatus, formatAppealStatusLabel, isTerminalAppealStatus, normalizeAppealStatus } from '@/lib/ticket-enums';
+import type { AppealFormField, AppealFormSettings } from '@/types/forms';
+
+// proto int64 timestamp fields serialize to JSON as epoch-millis strings (e.g. "1700000000000").
+// new Date("1700000000000") yields Invalid Date, so coerce to a Number before formatting.
+const formatEpochMillis = (value: string | number | undefined | null): string => {
+  if (value === undefined || value === null || value === '') {
+    return 'Unknown';
+  }
+  const millis = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(millis)) {
+    // Fall back to string parsing for ISO/date strings.
+    return formatDate(String(value));
+  }
+  return formatDate(new Date(millis).toISOString());
+};
+
+// Convert a proto int64 epoch-millis string (or number/ISO string) to an ISO string that
+// formatDate / new Date can parse. Returns undefined when no usable timestamp is present.
+const epochMillisToISO = (value: string | number | undefined | null): string | undefined => {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  const millis = typeof value === 'number' ? value : Number(value);
+  if (Number.isFinite(millis)) {
+    return new Date(millis).toISOString();
+  }
+  // Already an ISO/date string.
+  return String(value);
+};
+
+// Format date to MM/dd/yy HH:mm in browser's timezone
+
+// Define the search form schema
+const searchSchema = z.object({
+  banId: z.string().min(6, { message: "Ban ID must be at least 6 characters" }),
+});
+
+type SearchFormValues = z.infer<typeof searchSchema>;
+
+// Interface for punishment/ban information
+interface BanInfo {
+  id: string;
+  reason: string;
+  date: string;
+  staffMember: string;
+  status: 'Active' | 'Expired' | 'Pardoned';
+  expiresIn?: string;
+  type: string;
+  playerUuid?: string;
+  isAppealable?: boolean; // Whether this punishment type can be appealed
+}
+
+interface AppealAttachment {
+  id?: string;
+  url: string;
+  fileName?: string;
+  fileType: string;
+  fileSize?: number;
+}
+
+// Interface for appeal messages
+interface AppealMessage {
+  id: string;
+  sender: 'player' | 'staff' | 'system';
+  senderName: string;
+  content: string;
+  timestamp: string;
+  isStaffNote?: boolean;
+  attachments?: Array<AppealAttachment | string>; // Support both attachment objects and URL strings for backward compatibility
+}
+
+// Interface for appeal information
+interface AppealInfo {
+  id: string;
+  banId: string;
+  submittedOn: string;
+  status: string;
+  locked: boolean;
+  lastUpdate?: string;
+  messages: AppealMessage[];
+}
+
+interface UploadedAppealFile {
+  url: string;
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number;
+}
+
+interface AppealFieldFile {
+  id: string;
+  url: string;
+  key: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+}
+
+interface RawAppealReply {
+  id?: string;
+  staff?: boolean;
+  name: string;
+  sender: string;
+  content: string;
+  created?: string | number;
+  timestamp: string;
+  type?: string;
+  attachments?: Array<AppealAttachment | string>;
+}
+
+const AppealsPage = () => {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const [banInfo, setBanInfo] = useState<BanInfo | null>(null);
+  const [appealInfo, setAppealInfo] = useState<AppealInfo | null>(null);
+  const [showAppealForm, setShowAppealForm] = useState(false);
+  const [isLoadingPunishment, setIsLoadingPunishment] = useState(false);
+  const [punishmentError, setPunishmentError] = useState<string | null>(null);
+  const [newReply, setNewReply] = useState("");
+  const [verificationNeeded, setVerificationNeeded] = useState(false);
+  const [, setAttachments] = useState<Array<{id: string, url: string, key: string, fileName: string, fileType: string, fileSize: number, uploadedAt: string, uploadedBy: string}>>([]);
+  const [replyAttachments, setReplyAttachments] = useState<Array<{id: string, url: string, key: string, fileName: string, fileType: string, fileSize: number, uploadedAt: string, uploadedBy: string}>>([]);
+  const [, setForceRerender] = useState(0); // Force re-render for section visibility
+
+  // Appeal form configuration will come from the punishment-specific data
+  const [appealFormSettings, setAppealFormSettings] = useState<AppealFormSettings | undefined>(undefined);
+
+  // API mutations
+  const createAppealMutation = useCreateAppeal();
+
+  // Helper function to get file icon
+  const getFileIcon = (type: string) => {
+    if (type.startsWith('image/')) return <Image className="h-3 w-3" />;
+    if (type.startsWith('video/')) return <Video className="h-3 w-3" />;
+    if (type === 'application/pdf') return <FileText className="h-3 w-3" />;
+    return <File className="h-3 w-3" />;
+  };
+
+  // Helper function to truncate filename
+  const truncateFileName = (fileName: string, maxLength: number = 15) => {
+    if (fileName.length <= maxLength) return fileName;
+    const extension = fileName.split('.').pop();
+    const name = fileName.substring(0, fileName.lastIndexOf('.'));
+    const truncatedName = name.substring(0, maxLength - extension!.length - 4) + '...';
+    return `${truncatedName}.${extension}`;
+  };
+
+  // Reset form when appeal form settings change
+  useEffect(() => {
+    if (appealFormSettings) {
+      const newDefaultValues = {
+        banId: appealForm.getValues('banId') || "",
+        email: appealForm.getValues('email') || "",
+        // Add default values for dynamic fields
+        ...Object.fromEntries(
+          (Array.isArray(appealFormSettings?.fields) ? appealFormSettings.fields : []).map((field): [string, boolean | string[] | string] => {
+            let defaultValue: boolean | string[] | string;
+            switch (field.type) {
+              case 'checkbox':
+                defaultValue = false;
+                break;
+              case 'checkboxes':
+                defaultValue = [];
+                break;
+              case 'multiple_choice':
+              case 'dropdown':
+              case 'text':
+              case 'textarea':
+              case 'file_upload':
+              default:
+                defaultValue = '';
+                break;
+            }
+            return [field.id, defaultValue];
+          })
+        ),
+      };
+      
+      // Reset form with new default values but preserve banId and email
+      appealForm.reset(newDefaultValues);
+    }
+  }, [appealFormSettings]);
+
+  // Create dynamic form schema based on appeal form settings
+  const createDynamicSchema = () => {
+    if (!appealFormSettings?.fields) {
+      // Fallback to basic schema if no settings
+      return z.object({
+        banId: z.string().min(6, { message: "Ban ID must be at least 6 characters" }),
+        email: z.string().email({ message: "Please enter a valid email address" }),
+        reason: z.string().min(20, { message: "Please provide a detailed explanation (min 20 characters)" }),
+      });
+    }
+
+    const schemaFields: Record<string, z.ZodTypeAny> = {
+      banId: z.string().min(6, { message: "Ban ID must be at least 6 characters" }),
+      email: z.string().email({ message: "Please enter a valid email address" }),
+    };
+
+    if (Array.isArray(appealFormSettings.fields)) {
+      appealFormSettings.fields.forEach(field => {
+      switch (field.type) {
+        case 'text':
+          schemaFields[field.id] = field.required 
+            ? z.string().min(1, { message: `${field.label} is required` })
+            : z.string().optional();
+          break;
+        case 'textarea':
+          schemaFields[field.id] = field.required 
+            ? z.string().min(10, { message: `${field.label} must be at least 10 characters` })
+            : z.string().optional();
+          break;
+        case 'checkbox':
+          schemaFields[field.id] = field.required 
+            ? z.boolean().refine(val => val === true, { message: `${field.label} must be checked` })
+            : z.boolean().optional();
+          break;
+        case 'dropdown':
+        case 'multiple_choice':
+          schemaFields[field.id] = field.required 
+            ? z.string().min(1, { message: `${field.label} is required` })
+            : z.string().optional();
+          break;
+        case 'checkboxes':
+          schemaFields[field.id] = field.required 
+            ? z.array(z.string()).min(1, { message: `At least one ${field.label} must be selected` })
+            : z.array(z.string()).optional();
+          break;
+        case 'file_upload':
+          schemaFields[field.id] = field.required 
+            ? z.union([
+                z.array(z.any()).min(1, { message: `${field.label} is required` }),
+                z.string().min(1, { message: `${field.label} is required` })
+              ])
+            : z.union([z.array(z.any()), z.string()]).optional();
+          break;
+      }
+    });
+    }
+
+    return z.object(schemaFields);
+  };
+
+  const dynamicSchema = createDynamicSchema();
+  type DynamicFormValues = z.infer<typeof dynamicSchema>;
+
+  // Dynamic form
+  const appealForm = useForm<DynamicFormValues>({
+    resolver: zodResolver(dynamicSchema),
+    defaultValues: {
+      banId: "",
+      email: "",
+      // Add default values for dynamic fields
+      ...Object.fromEntries(
+        (Array.isArray(appealFormSettings?.fields) ? appealFormSettings.fields : []).map(field => {
+          let defaultValue;
+          switch (field.type) {
+            case 'checkbox':
+              defaultValue = false;
+              break;
+            case 'checkboxes':
+              defaultValue = [];
+              break;
+            case 'multiple_choice':
+            case 'dropdown':
+            case 'text':
+            case 'textarea':
+            case 'file_upload':
+            default:
+              defaultValue = '';
+              break;
+          }
+          return [field.id, defaultValue];
+        })
+      ),
+    },
+  });
+
+  // Search form
+  const searchForm = useForm<SearchFormValues>({
+    resolver: zodResolver(searchSchema),
+    defaultValues: {
+      banId: "",
+    },
+  });
+
+  // Handle search form submission
+  const onSearchSubmit = async (values: SearchFormValues) => {
+    const normalizedBanId = values.banId.toUpperCase().replace(/\s/g, '');
+    setIsLoadingPunishment(true);
+    setPunishmentError(null);
+    setVerificationNeeded(false);
+
+    try {
+      // Fetch punishment information from public API
+      const response = await apiFetch(`/v1/public/punishment/${normalizedBanId}/appeal-info`);
+
+      if (!response.ok) {
+        if (response.status === 400) {
+          // Check if it's an unstarted punishment error
+          const errorData = await response.json();
+          if (errorData.error?.includes('not been started yet')) {
+            setPunishmentError(t('appeals.punishmentNotStarted'));
+            toast({
+              title: t('appeals.cannotAppealUnstarted'),
+              description: t('appeals.cannotAppealUnstartedDesc'),
+              variant: "destructive"
+            });
+            return;
+          }
+        }
+        throw new Error('Punishment not found');
+      }
+
+      const punishment = await response.json();
+        // Transform punishment data to BanInfo format
+      const banInfo: BanInfo = {
+        id: punishment.id,
+        reason: 'Punishment details are not available publicly', // Reason is no longer provided by public API
+        date: formatEpochMillis(punishment.issued),
+        staffMember: 'Staff', // Public API doesn't expose staff member names
+        status: punishment.active ? 'Active' : 'Expired',
+        expiresIn: punishment.expires ? formatEpochMillis(punishment.expires) : 'Permanent', // Use the expires field from API
+        type: punishment.type,
+        playerUuid: punishment.playerUuid, // Use the actual UUID from the API response
+        isAppealable: punishment.appealable, // Use the appealable field from public API
+      };
+
+      setBanInfo(banInfo);
+
+      // Set punishment-specific appeal form configuration
+      if (punishment.appealForm) {
+        setAppealFormSettings(punishment.appealForm);
+      } else {
+        // Fallback to default appeal form if punishment type doesn't have one
+        setAppealFormSettings({
+          fields: [
+            {
+              id: 'reason',
+              type: 'textarea',
+              label: 'Appeal Reason',
+              description: 'Please explain why you believe this punishment should be removed or reduced.',
+              required: true,
+              order: 1,
+              sectionId: 'default_section'
+            }
+          ],
+          sections: [
+            {
+              id: 'default_section',
+              title: 'Appeal Information',
+              description: 'Please provide information about your appeal',
+              order: 0
+            }
+          ]
+        });
+      }
+
+      // Check for existing appeals from the public API response
+      if (punishment.existingAppeal) {
+        // Set basic appeal info first
+        const basicAppealInfo: AppealInfo = {
+          id: punishment.existingAppeal.id,
+          banId: punishment.id,
+          submittedOn: punishment.existingAppeal.submittedDate,
+          status: deriveAppealStatus(punishment.existingAppeal.appealWorkflowStatus, punishment.existingAppeal.status),
+          locked: Boolean(punishment.existingAppeal.locked),
+          lastUpdate: punishment.existingAppeal.submittedDate,
+          messages: []
+        };
+        setAppealInfo(basicAppealInfo);
+        setShowAppealForm(false);
+
+        // Fetch full appeal details including messages
+        await fetchAppealDetails(punishment.existingAppeal.id);
+
+        // Show toast for existing appeal
+        toast({
+          title: t('appeals.appealAlreadyExists'),
+          description: t('appeals.appealAlreadyExistsDesc', { status: formatAppealStatusLabel(basicAppealInfo.status) }),
+          variant: "default"
+        });
+      } else {        
+        // Check if punishment is not appealable
+        if (banInfo.isAppealable === false) {
+          toast({
+            title: t('appeals.cannotAppeal'),
+            description: t('appeals.cannotAppealDesc'),
+            variant: "destructive"
+          });
+          setShowAppealForm(false);
+          setAppealInfo(null);
+        } else if (banInfo.status !== 'Active') {
+          // Punishment is not active (expired/pardoned)
+          toast({
+            title: t('appeals.cannotAppealInactive'),
+            description: t('appeals.cannotAppealInactiveDesc'),
+            variant: "destructive"
+          });
+          setShowAppealForm(false);
+          setAppealInfo(null);
+        } else {
+          setShowAppealForm(true);
+          setAppealInfo(null);
+        }
+      }
+
+      // Prefill form with punishment ID
+      appealForm.setValue('banId', normalizedBanId);
+
+    } catch (error) {
+      console.error('Error fetching punishment:', error);
+      setBanInfo(null);
+      setAppealInfo(null);
+      setShowAppealForm(false);
+      setPunishmentError(t('appeals.punishmentNotFound', { id: normalizedBanId }));
+      toast({
+        title: t('appeals.punishmentNotFoundTitle'),
+        description: t('appeals.punishmentNotFound', { id: normalizedBanId }),
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoadingPunishment(false);
+    }
+  };
+
+  // Handle appeal form submission (similar to ticket form submission)
+  const onAppealSubmit = async (values: DynamicFormValues) => {
+    if (!banInfo) return;
+
+    try {
+      // Create initial message content from form data (similar to ticket system)
+      let contentString = '';
+      
+      // Create a map of field IDs to labels
+      const fieldLabels: Record<string, string> = {};
+      if (appealFormSettings?.fields) {
+        appealFormSettings.fields.forEach((field) => {
+          fieldLabels[field.id] = field.label;
+        });
+      }
+      
+      // Collect all attachments from file upload fields
+      const allAttachments: JsonValue[] = [];
+      
+      // Convert form data to structured message content
+      Object.entries(values).forEach(([key, value]) => {
+        // Skip system fields
+        if (['banId', 'email'].includes(key)) return;
+        
+        // Get the field from form configuration
+        const field = appealFormSettings?.fields?.find(f => f.id === key);
+        const fieldLabel = field?.label || key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1');
+        
+        // Handle file upload fields differently
+        if (field?.type === 'file_upload') {
+          const files = Array.isArray(value) ? value : (value && typeof value === 'string' ? [value] : []);
+          if (files.length > 0) {
+            // Add files to attachments array for actual file uploads
+            files.forEach((file: string | UploadedAppealFile) => {
+              if (typeof file === 'object' && file.url) {
+                allAttachments.push({
+                  url: file.url,
+                  fileName: file.fileName || file.url.split('/').pop() || 'file',
+                  fileType: file.fileType || 'application/octet-stream',
+                  fileSize: file.fileSize || 0
+                });
+              } else if (typeof file === 'string' && file.trim()) {
+                allAttachments.push({
+                  url: file,
+                  fileName: file.split('/').pop() || 'file',
+                  fileType: 'application/octet-stream'
+                });
+              }
+            });
+            
+            // Show uploaded file names in the content (not as separate attachments list)
+            if (files.length > 0) {
+              const fileNames = files.map((file: string | UploadedAppealFile) => {
+                if (typeof file === 'object' && file.fileName) {
+                  return `• ${file.fileName}`;
+                } else if (typeof file === 'string') {
+                  return `• ${file.split('/').pop() || 'file'}`;
+                }
+                return '• file';
+              }).join('\n');
+              contentString += `**${fieldLabel}:**\n${fileNames}\n\n`;
+            }
+          }
+        } else {
+          // Handle regular fields - only include if they have actual content
+          const hasValue = value !== null && value !== undefined && 
+            (typeof value === 'string' ? value.trim() !== '' : 
+             Array.isArray(value) ? value.length > 0 : 
+             typeof value === 'boolean' ? true : 
+             value.toString().trim() !== '');
+          
+          if (hasValue) {
+            // Format the value properly
+            let displayValue = value;
+            if (Array.isArray(value)) {
+              // For checkboxes - show as bullet list
+              displayValue = value.map(v => `• ${v}`).join('\n');
+            } else if (typeof value === 'boolean') {
+              displayValue = value ? 'Yes' : 'No';
+            }
+            
+            contentString += `**${fieldLabel}:**\n${displayValue}\n\n`;
+          }
+        }
+      });
+
+      const fieldValues: Record<string, JsonValue> = values;
+
+      // Extract main reason field (look for common reason field names)
+      const reasonFieldNames = ['reason', 'appeal_reason', 'why_appeal', 'explanation'];
+      const reasonField = appealFormSettings?.fields?.find(field =>
+        reasonFieldNames.includes(field.id.toLowerCase()) ||
+        field.label.toLowerCase().includes('reason') ||
+        field.label.toLowerCase().includes('why')
+      );
+      const mainReason = reasonField ? fieldValues[reasonField.id] : '';
+
+      // Extract evidence field
+      const evidenceFieldNames = ['evidence', 'proof', 'screenshots', 'links'];
+      const evidenceField = appealFormSettings?.fields?.find(field =>
+        evidenceFieldNames.includes(field.id.toLowerCase()) ||
+        field.label.toLowerCase().includes('evidence') ||
+        field.label.toLowerCase().includes('proof')
+      );
+      const evidence = evidenceField ? fieldValues[evidenceField.id] : '';
+      
+      // All other form data goes to additionalData
+      const additionalData = Object.fromEntries(
+        Object.entries(values).filter(([key]) => 
+          !['banId', 'email'].includes(key) && 
+          key !== reasonField?.id && 
+          key !== evidenceField?.id
+        )
+      );
+
+      // Create field labels mapping for server
+      const fieldLabelsMapping: Record<string, string> = {};
+      if (appealFormSettings?.fields) {
+        appealFormSettings.fields.forEach((field) => {
+          fieldLabelsMapping[field.id] = field.label;
+        });
+      }
+
+      // Create appeal data matching server expectations
+      const appealData = {
+        punishmentId: values.banId,
+        playerUuid: banInfo.playerUuid ?? '',
+        email: values.email,
+        reason: mainReason,
+        evidence: evidence,
+        additionalData: additionalData,
+        attachments: allAttachments,
+        fieldLabels: fieldLabelsMapping  // Send field labels to server
+      };
+
+      await createAppealMutation.mutateAsync(appealData);
+
+      toast({
+        title: t('appeals.appealSubmitted'),
+        description: t('appeals.appealSubmittedDesc', { id: values.banId }),
+      });
+
+      // Refresh the page data
+      setShowAppealForm(false);
+      setAttachments([]);
+      onSearchSubmit({ banId: values.banId });
+
+    } catch (error) {
+      console.error('Error submitting appeal:', error);
+      toast({
+        title: t('appeals.error'),
+        description: t('appeals.submitFailed'),
+        variant: "destructive"
+      });
+    }
+  };
+
+  // Fetch full appeal details when an existing appeal is found
+  const fetchAppealDetails = async (appealId: string) => {
+    try {
+      const response = await apiFetch(withAppealAuthToken(`/v1/public/appeals/${appealId}`, appealId));
+      if (response.status === 403) {
+        const body = await response.json().catch(() => ({}));
+        if (body.requiresVerification) {
+          setVerificationNeeded(true);
+          return;
+        }
+        throw new Error('Failed to fetch appeal details');
+      }
+      if (!response.ok) {
+        throw new Error('Failed to fetch appeal details');
+      }
+      const appealData = await response.json();
+      setVerificationNeeded(false);
+
+      // Transform the appeal data to match our interface
+      const fullAppealInfo: AppealInfo = {
+        id: appealData._id || appealData.id,
+        banId: appealData.data?.punishmentId || banInfo?.id || '',
+        submittedOn: appealData.created || appealData.submittedDate,
+        status: deriveAppealStatus(appealData.appealWorkflowStatus, appealData.status),
+        locked: Boolean(appealData.locked),
+        lastUpdate: appealData.updatedAt || appealData.created,
+        messages: (appealData.messages || []).map((reply: RawAppealReply) => ({
+          id: reply.id || `msg-${Date.now()}-${Math.random()}`,
+          // proto TicketReply exposes staff-ness via the `staff` boolean, not a senderType/type string.
+          sender: reply.staff ? 'staff' : 'player',
+          senderName: reply.name || reply.sender,
+          content: reply.content,
+          // `created` is a proto int64 -> epoch-millis string; coerce so formatDate works.
+          timestamp: epochMillisToISO(reply.created) || reply.timestamp,
+          isStaffNote: reply.type === 'staff-note',
+          attachments: reply.attachments || []
+        }))
+      };
+      
+      setAppealInfo(fullAppealInfo);
+    } catch (error) {
+      console.error('Error fetching appeal details:', error);
+      // Keep basic appeal info if detailed fetch fails
+    }
+  };
+
+  // Handle sending a reply to an existing appeal
+  const handleSendReply = async () => {
+    if (!newReply.trim() || !appealInfo) return;
+
+    try {
+      const response = await apiFetch(withAppealAuthToken(`/v1/public/appeals/${appealInfo.id}/replies`, appealInfo.id), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'You',
+          content: newReply,
+          type: 'player',
+          staff: false,
+          attachments: replyAttachments, // Include full attachment data
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        if (response.status === 409) {
+          await fetchAppealDetails(appealInfo.id);
+        }
+        const backendMessage = typeof errorBody?.message === 'string' ? errorBody.message :
+          typeof errorBody?.error === 'string' ? errorBody.error : undefined;
+        throw new Error(backendMessage || t('appeals.replyFailed'));
+      }
+
+      // Refresh appeal details
+      await fetchAppealDetails(appealInfo.id);
+      setNewReply("");
+      setReplyAttachments([]); // Clear reply attachments
+
+      toast({
+        title: t('appeals.replySent'),
+        description: t('appeals.replySentDesc'),
+      });
+
+    } catch (error) {
+      console.error('Error sending reply:', error);
+      toast({
+        title: t('appeals.error'),
+        description: (error instanceof Error && error.message) || t('appeals.replyFailed'),
+        variant: "destructive"
+      });
+    }
+  };
+
+  const normalizedAppealStatus = normalizeAppealStatus(appealInfo?.status);
+  const appealStatusLabel = formatAppealStatusLabel(appealInfo?.status);
+  const appealAcceptsReplies = !!appealInfo && !appealInfo.locked && !isTerminalAppealStatus(appealInfo.status);
+
+  // Render dynamic form field
+  const renderFormField = (field: AppealFormField) => {
+    switch (field.type) {
+      case 'text':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={({ field: formField }) => (
+              <FormItem>
+                <FormLabel>{field.label}</FormLabel>
+                <FormControl>
+                  <Input {...formField} placeholder={field.description} />
+                </FormControl>
+                {field.description && (
+                  <FormDescription>{field.description}</FormDescription>
+                )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        );
+
+      case 'textarea':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={({ field: formField }) => (
+              <FormItem>
+                <FormLabel>{field.label}</FormLabel>
+                <FormControl>
+                  <Textarea 
+                    {...formField} 
+                    placeholder={field.description}
+                    className="min-h-[100px]"
+                  />
+                </FormControl>
+                {field.description && (
+                  <FormDescription>{field.description}</FormDescription>
+                )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        );
+
+      case 'checkbox':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={({ field: formField }) => (
+              <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                <FormControl>
+                  <Checkbox
+                    checked={formField.value}
+                    onCheckedChange={formField.onChange}
+                  />
+                </FormControl>
+                <div className="space-y-1 leading-none">
+                  <FormLabel>{field.label}</FormLabel>
+                  {field.description && (
+                    <FormDescription>{field.description}</FormDescription>
+                  )}
+                </div>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        );
+
+      case 'dropdown':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={({ field: formField }) => (
+              <FormItem>
+                <FormLabel>{field.label}</FormLabel>
+                <Select 
+                  onValueChange={(value) => {
+                    formField.onChange(value);
+                    
+                    // Handle section navigation - force form re-validation to trigger conditional renders
+                    if (field.optionSectionMapping && field.optionSectionMapping[value]) {
+                      // Force re-render by updating state
+                      setForceRerender(prev => prev + 1);
+                    } else if (field.goToSection) {
+                      // Navigate to specific section
+                      setForceRerender(prev => prev + 1);
+                    }
+                  }} 
+                  defaultValue={formField.value}
+                >
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder={field.description || t('appeals.selectAnOption')} />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {field.options?.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {field.description && (
+                  <FormDescription>{field.description}</FormDescription>
+                )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        );
+
+      case 'multiple_choice':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={({ field: formField }) => (
+              <FormItem className="space-y-3">
+                <FormLabel>{field.label}</FormLabel>
+                <FormControl>
+                  <RadioGroup
+                    onValueChange={(value) => {
+                      formField.onChange(value);
+                      
+                      // Handle section navigation - force form re-validation to trigger conditional renders
+                      if (field.optionSectionMapping && field.optionSectionMapping[value]) {
+                        // Force re-render by updating state
+                        setForceRerender(prev => prev + 1);
+                      } else if (field.goToSection) {
+                        // Navigate to specific section
+                        setForceRerender(prev => prev + 1);
+                      }
+                    }}
+                    defaultValue={formField.value}
+                    className="flex flex-col space-y-1"
+                  >
+                    {field.options?.map((option) => (
+                      <FormItem key={option} className="flex items-center space-x-3 space-y-0">
+                        <FormControl>
+                          <RadioGroupItem value={option} />
+                        </FormControl>
+                        <FormLabel className="font-normal">
+                          {option}
+                        </FormLabel>
+                      </FormItem>
+                    ))}
+                  </RadioGroup>
+                </FormControl>
+                {field.description && (
+                  <FormDescription>{field.description}</FormDescription>
+                )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        );
+
+      case 'checkboxes':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={() => (
+              <FormItem>
+                <div className="mb-4">
+                  <FormLabel className="text-base">{field.label}</FormLabel>
+                  {field.description && (
+                    <FormDescription>{field.description}</FormDescription>
+                  )}
+                </div>
+                {field.options?.map((option) => (
+                  <FormField
+                    key={option}
+                    control={appealForm.control}
+                    name={field.id as FieldPath<DynamicFormValues>}
+                    render={({ field: formField }) => {
+                      return (
+                        <FormItem
+                          key={option}
+                          className="flex flex-row items-start space-x-3 space-y-0"
+                        >
+                          <FormControl>
+                            <Checkbox
+                              checked={Array.isArray(formField.value) && formField.value.includes(option)}
+                              onCheckedChange={(checked) => {
+                                const current = Array.isArray(formField.value) ? formField.value : [];
+                                return checked
+                                  ? formField.onChange([...current, option])
+                                  : formField.onChange(
+                                      current.filter((value: string) => value !== option)
+                                    );
+                              }}
+                            />
+                          </FormControl>
+                          <FormLabel className="font-normal">
+                            {option}
+                          </FormLabel>
+                        </FormItem>
+                      )
+                    }}
+                  />
+                ))}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        );
+
+      case 'file_upload':
+        return (
+          <FormField
+            key={field.id}
+            control={appealForm.control}
+            name={field.id as FieldPath<DynamicFormValues>}
+            render={({ field: formField }) => {
+              const currentFiles = Array.isArray(formField.value) ? formField.value : formField.value ? [formField.value] : [];
+              
+              const handleFileUpload = (result: { url: string; key: string }, file?: File) => {
+                const newFile = {
+                  id: Date.now().toString(),
+                  url: result.url,
+                  key: result.key,
+                  fileName: file?.name || result.url.split('/').pop() || 'file',
+                  fileType: file?.type || 'application/octet-stream',
+                  fileSize: file?.size || 0
+                };
+                
+                const updatedFiles = [...currentFiles, newFile];
+                formField.onChange(updatedFiles);
+              };
+              
+              const handleRemoveFile = (fileToRemove: AppealFieldFile) => {
+                const updatedFiles = currentFiles.filter((file: AppealFieldFile) => file.id !== fileToRemove.id);
+                formField.onChange(updatedFiles);
+              };
+              
+              return (
+                <FormItem>
+                  <FormLabel>{field.label}</FormLabel>
+                  <FormControl>
+                    <div className="space-y-2">
+                      <MediaUpload
+                        uploadType="appeal"
+                        onUploadComplete={handleFileUpload}
+                        metadata={{
+                          entityId: 'new',
+                          fieldId: field.id
+                        }}
+                        variant="compact"
+                        maxFiles={5}
+                      />
+                      
+                      {/* Display uploaded files */}
+                      {currentFiles.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          <div className="text-sm font-medium text-muted-foreground">{t('appeals.uploadedFiles')}</div>
+                          {currentFiles.map((file: AppealFieldFile) => (
+                            <div key={file.id} className="flex items-center justify-between p-2 bg-muted/50 rounded border">
+                              <div className="flex items-center gap-2">
+                                {getFileIcon(file.fileType)}
+                                <span className="text-sm">{file.fileName}</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveFile(file)}
+                                className="text-destructive hover:text-destructive/80 text-sm"
+                              >
+                                {t('appeals.remove')}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </FormControl>
+                  {field.description && (
+                    <FormDescription>{field.description}</FormDescription>
+                  )}
+                  <FormMessage />
+                </FormItem>
+              );
+            }}
+          />
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  // Avatar component for messages (copied from player-ticket)
+  const MessageAvatar = ({ message }: { message: AppealMessage }) => {
+    const [avatarError, setAvatarError] = useState(false);
+    const [avatarLoading, setAvatarLoading] = useState(true);
+
+    // For player messages, use the player's UUID if available
+    if (message.sender === 'player') {
+      if (banInfo?.playerUuid && !avatarError) {
+        return (
+          <div className="relative h-8 w-8 bg-muted rounded-md flex items-center justify-center overflow-hidden flex-shrink-0">
+            <img 
+              src={getAvatarUrl(banInfo.playerUuid, 32, true)}
+              alt={`${message.senderName} Avatar`}
+              className={`w-full h-full object-cover transition-opacity duration-200 ${avatarLoading ? 'opacity-0' : 'opacity-100'}`}
+              onError={() => {
+                setAvatarError(true);
+                setAvatarLoading(false);
+              }}
+              onLoad={() => {
+                setAvatarError(false);
+                setAvatarLoading(false);
+              }}
+            />
+            {avatarLoading && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-xs font-bold text-primary">{message.senderName?.substring(0, 2) || 'P'}</span>
+              </div>
+            )}
+          </div>
+        );
+      }
+      // Fallback for player without UUID
+      return (
+        <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-md flex items-center justify-center flex-shrink-0">
+          <span className="text-xs font-bold text-blue-600 dark:text-blue-300">{message.senderName?.substring(0, 2) || 'P'}</span>
+        </div>
+      );
+    }
+
+    // For staff messages
+    if (message.sender === 'staff') {
+      return (
+        <div className="h-8 w-8 bg-green-100 dark:bg-green-900 rounded-md flex items-center justify-center flex-shrink-0">
+          <span className="text-xs font-bold text-green-600 dark:text-green-300">{message.senderName?.substring(0, 2) || 'S'}</span>
+        </div>
+      );
+    }
+
+    // System messages
+    return (
+      <div className="h-8 w-8 bg-gray-100 dark:bg-gray-800 rounded-md flex items-center justify-center flex-shrink-0">
+        <span className="text-xs font-bold text-gray-600 dark:text-gray-300">SY</span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-4xl mx-auto">
+        {/* Header section */}
+        <div className="flex flex-col space-y-2 mb-8 text-center">
+          <h1 className="text-3xl font-bold">{t('appeals.title')}</h1>
+          <p className="text-muted-foreground">
+            {t('appeals.subtitle')}
+          </p>
+        </div>
+
+        <Card className="shadow-card">
+          <CardContent className="pt-6">
+            <Form {...searchForm}>
+              <form onSubmit={searchForm.handleSubmit(onSearchSubmit)} className="space-y-4">
+                <FormField
+                  control={searchForm.control}
+                  name="banId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('appeals.punishmentId')}</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <SearchIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            {...field}
+                            placeholder={t('appeals.punishmentIdPlaceholder')}
+                            className={`pl-10 ${punishmentError ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                            disabled={isLoadingPunishment}
+                            onChange={(e) => {
+                              field.onChange(e);
+                              if (punishmentError) setPunishmentError(null);
+                            }}
+                          />
+                        </div>
+                      </FormControl>
+                      <FormDescription>
+                        {t('appeals.punishmentIdDesc')}
+                      </FormDescription>
+                      <FormMessage />
+                      {punishmentError && (
+                        <p className="text-sm font-medium text-destructive">{punishmentError}</p>
+                      )}
+                    </FormItem>
+                  )}
+                />
+
+                <Button type="submit" className="w-full mt-6" disabled={isLoadingPunishment}>
+                  {isLoadingPunishment ? t('appeals.searching') : t('appeals.checkStatus')}
+                </Button>
+              </form>
+            </Form>
+            
+            {/* Ban Information Section */}
+            {banInfo && (
+              <div className="mt-8 space-y-4">
+                <h3 className="text-lg font-semibold">{t('appeals.punishmentInformation')}</h3>
+                <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.punishmentIdLabel')}</span>
+                    <Badge variant="outline">{banInfo.id}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.typeLabel')}</span>
+                    <Badge variant="outline">{banInfo.type}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.dateLabel')}</span>
+                    <span className="text-sm">{banInfo.date}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.statusLabel')}</span>
+                    <Badge
+                      variant={banInfo.status === 'Active' ? "destructive" :
+                              banInfo.status === 'Pardoned' ? "outline" : "default"}
+                      className={banInfo.status === 'Pardoned' ? "border-green-500 text-green-500" : ""}
+                    >
+                      {banInfo.status}
+                      {banInfo.expiresIn && ` (${t('appeals.expires')}: ${banInfo.expiresIn})`}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Appeal Information Section */}
+            {appealInfo && (
+              <div className="mt-8 space-y-4">
+                <h3 className="text-lg font-semibold">{t('appeals.appealStatus')}</h3>
+                <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.appealIdLabel')}</span>
+                    <Badge variant="outline">{appealInfo.id}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.submittedLabel')}</span>
+                    <span className="text-sm">{formatDate(appealInfo.submittedOn)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{t('appeals.statusLabel')}</span>
+                    <Badge 
+                      variant={
+                        normalizedAppealStatus === 'approved' ? "outline" :
+                        normalizedAppealStatus === 'rejected' ? "destructive" :
+                        normalizedAppealStatus === 'closed' ? "outline" : "default"
+                      }
+                      className={normalizedAppealStatus === 'approved' ? "border-green-500 text-green-500" : ""}
+                    >
+                      {appealStatusLabel}
+                    </Badge>
+                  </div>
+                  {appealInfo.lastUpdate && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">{t('appeals.lastUpdateLabel')}</span>
+                      <span className="text-sm">{formatDate(appealInfo.lastUpdate)}</span>
+                    </div>
+                  )}
+                </div>
+                
+                {normalizedAppealStatus === 'open' && (
+                  <StatusBanner
+                    variant="info"
+                    title={t('appeals.appealUnderReview')}
+                    className="mt-4"
+                  >
+                    {t('appeals.appealUnderReviewDesc')}
+                  </StatusBanner>
+                )}
+
+                {normalizedAppealStatus === 'under_review' && (
+                  <StatusBanner
+                    variant="info"
+                    title="Appeal Under Review"
+                    className="mt-4"
+                  >
+                    Staff are actively reviewing your appeal.
+                  </StatusBanner>
+                )}
+
+                {normalizedAppealStatus === 'pending_player_response' && (
+                  <StatusBanner
+                    variant="warning"
+                    title="Reply Needed"
+                    className="mt-4"
+                  >
+                    Staff need more information before they can finish reviewing this appeal.
+                  </StatusBanner>
+                )}
+
+                {normalizedAppealStatus === 'rejected' && (
+                  <StatusBanner
+                    variant="error"
+                    icon={<ShieldX className="h-5 w-5 text-red-600 dark:text-red-400" />}
+                    title={t('appeals.appealRejected')}
+                    className="mt-4"
+                  >
+                    {t('appeals.appealRejectedDesc')}
+                  </StatusBanner>
+                )}
+
+                {normalizedAppealStatus === 'approved' && (
+                  <StatusBanner
+                    variant="success"
+                    icon={<ShieldCheck className="h-5 w-5 text-green-600 dark:text-green-400" />}
+                    title={t('appeals.appealApproved')}
+                    className="mt-4"
+                  >
+                    {t('appeals.appealApprovedDesc')}
+                  </StatusBanner>
+                )}
+
+                {normalizedAppealStatus === 'closed' && (
+                  <StatusBanner
+                    variant="info"
+                    title={t('appeals.appealClosed')}
+                    className="mt-4"
+                  >
+                    {t('appeals.appealClosedDesc')}
+                  </StatusBanner>
+                )}
+
+                {verificationNeeded && <p className="mt-4" role="alert">Open the original appeal access link, or ask staff for a new link.</p>}
+
+                {/* Messages Section */}
+                {appealInfo.messages && appealInfo.messages.length > 0 && (
+                  <div className="mt-6">
+                    <Separator />
+                    <div className="bg-card rounded-lg shadow-sm border border-border overflow-hidden mt-4">
+                      <div className="p-3 bg-muted/30">
+                        <h4 className="font-semibold">{t('appeals.appealConversation')}</h4>
+                      </div>
+                      <div className="divide-y max-h-[400px] overflow-y-auto">
+                        {appealInfo.messages
+                          .filter(message => !message.isStaffNote && message.sender !== 'system')
+                          .map((message) => (
+                            <div key={message.id} className="p-4">
+                              <div className="flex items-start gap-3">
+                                <MessageAvatar message={message} />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="font-medium text-sm">{message.senderName}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {formatDate(message.timestamp)}
+                                    </span>
+                                    {message.sender === 'staff' && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        {t('playerTicket.staffBadge')}
+                                      </Badge>
+                                    )}
+                                    {message.sender === 'system' && (
+                                      <Badge variant="outline" className="text-xs">
+                                        {t('playerTicket.systemBadge')}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="text-sm">
+                                    <div className="whitespace-pre-wrap break-words" style={{ whiteSpace: 'pre-wrap' }}>{message.content}</div>
+                                    
+                                    {/* Display message attachments */}
+                                    {message.attachments && message.attachments.length > 0 && (
+                                      <div className="flex flex-wrap gap-2 mt-2">
+                                        {message.attachments.map((attachment, idx: number) => {
+                                          // Handle both attachment objects and URL strings
+                                          const attachmentData = typeof attachment === 'string' ? 
+                                            { url: attachment, fileName: attachment.split('/').pop() || 'file', fileType: 'application/octet-stream' } : 
+                                            attachment;
+                                          
+                                          return (
+                                            <Badge 
+                                              key={idx} 
+                                              variant="outline" 
+                                              className="flex items-center gap-1 cursor-pointer hover:bg-muted/50"
+                                              onClick={() => window.open(attachmentData.url, '_blank')}
+                                            >
+                                              {getFileIcon(attachmentData.fileType)}
+                                              <span className="text-xs">{truncateFileName(attachmentData.fileName || attachmentData.url.split('/').pop() || 'file')}</span>
+                                            </Badge>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                    
+                    {appealInfo.locked && !isTerminalAppealStatus(appealInfo.status) && (
+                      <StatusBanner
+                        variant="info"
+                        title={t('appeals.repliesLocked')}
+                        className="mt-4"
+                      >
+                        {t('appeals.repliesLockedDesc')}
+                      </StatusBanner>
+                    )}
+
+                    {/* Reply input */}
+                    {appealAcceptsReplies && (
+                      <Card className="mt-4 shadow-card">
+                        <CardHeader>
+                          <CardTitle className="text-lg">{t('appeals.replyToAppeal')}</CardTitle>
+                          <CardDescription>
+                            {t('appeals.replyToAppealDesc')}
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="reply">{t('playerTicket.replyLabel')}</Label>
+                              <Textarea
+                                id="reply"
+                                value={newReply}
+                                onChange={(e) => setNewReply(e.target.value)}
+                                placeholder={t('playerTicket.replyPlaceholder')}
+                                className="min-h-[100px]"
+                              />
+                            </div>
+                            
+                            {/* Attachment Badges */}
+                            {replyAttachments.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {replyAttachments.map((attachment) => (
+                                  <Badge 
+                                    key={attachment.id} 
+                                    variant="secondary" 
+                                    className="flex items-center gap-1 cursor-pointer hover:bg-secondary/80"
+                                    onClick={() => window.open(attachment.url, '_blank')}
+                                  >
+                                    {getFileIcon(attachment.fileType)}
+                                    <span className="text-xs">{truncateFileName(attachment.fileName)}</span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReplyAttachments(prev => prev.filter(a => a.id !== attachment.id));
+                                      }}
+                                      className="ml-1 hover:bg-destructive/10 rounded-sm p-0.5"
+                                      title={`Remove ${attachment.fileName}`}
+                                    >
+                                      <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                                    </button>
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                            
+                            {/* Reply Actions */}
+                            <div className="flex items-center justify-between">
+                              <MediaUpload
+                                uploadType="appeal"
+                                onUploadComplete={(result, file) => {
+                                  if (file) {
+                                    const newAttachment = {
+                                      id: Date.now().toString(),
+                                      url: result.url,
+                                      key: result.key,
+                                      fileName: file.name,
+                                      fileType: file.type,
+                                      fileSize: file.size,
+                                      uploadedAt: new Date().toISOString(),
+                                      uploadedBy: 'You'
+                                    };
+                                    setReplyAttachments(prev => [...prev, newAttachment]);
+                                  }
+                                }}
+                                metadata={{
+                                  appealId: appealInfo?.id || 'new',
+                                  fieldId: 'reply'
+                                }}
+                                variant="button-only"
+                                maxFiles={5}
+                              />
+                              <Button
+                                onClick={handleSendReply}
+                                disabled={!newReply.trim()}
+                                className="flex items-center"
+                              >
+                                <Send className="mr-2 h-4 w-4" />
+                                {t('playerTicket.sendReply')}
+                              </Button>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Dynamic Appeal Form */}
+            {showAppealForm && banInfo && (
+              <div className="mt-8 space-y-4">
+                <Separator />
+                
+                {banInfo.isAppealable === false && (
+                  <StatusBanner variant="error" title={t('appeals.appealNotAvailable')}>
+                    {t('appeals.appealNotAvailableDesc')}
+                  </StatusBanner>
+                )}
+                
+                {/* Dynamic Appeal Form */}
+                {banInfo.isAppealable !== false && (
+                  <Card className="mb-6 shadow-card">
+                    <CardHeader>
+                      <CardTitle>{t('appeals.submitAppeal')}</CardTitle>
+                      <CardDescription>
+                        {t('appeals.submitAppealDesc')}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                  <Form {...appealForm}>
+                    <form onSubmit={appealForm.handleSubmit(onAppealSubmit)} className="space-y-4">
+                      {/* Punishment ID Field (Read-only) */}
+                      <FormField
+                        control={appealForm.control}
+                        name="banId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('appeals.punishmentId')}</FormLabel>
+                            <FormControl>
+                              <Input {...field} readOnly disabled />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      {/* Email Field */}
+                      <FormField
+                        control={appealForm.control}
+                        name="email"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('submitTicket.emailAddress')}</FormLabel>
+                            <FormControl>
+                              <Input {...field} type="email" placeholder={t('appeals.emailPlaceholder')} />
+                            </FormControl>
+                            <FormDescription>
+                              {t('appeals.emailDesc')}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      {/* Dynamic Fields with Sections */}
+                      {appealFormSettings?.sections && Array.isArray(appealFormSettings.sections) && appealFormSettings.sections.length > 0 && 
+                        appealFormSettings.sections
+                          .sort((a, b) => a.order - b.order)
+                          .map(section => {
+                            // Check section visibility with forceRerender dependency
+                            let isVisible = !section.hideByDefault;
+                            
+                            // Show section if condition is met
+                            if (section.showIfFieldId && section.showIfValue) {
+                              const fieldValue = appealForm.watch(section.showIfFieldId);
+                              isVisible = fieldValue === section.showIfValue;
+                            } else if (section.showIfFieldId && section.showIfValues) {
+                              const fieldValue = appealForm.watch(section.showIfFieldId);
+                              isVisible = section.showIfValues.includes(fieldValue);
+                            }
+                            
+                            // Check if any field in this section has optionSectionMapping that targets this section
+                            if (!isVisible && appealFormSettings?.fields) {
+                              appealFormSettings.fields.forEach(field => {
+                                if (field.optionSectionMapping) {
+                                  const fieldValue = appealForm.watch(field.id);
+                                  if (field.optionSectionMapping[fieldValue] === section.id) {
+                                    isVisible = true;
+                                  }
+                                }
+                              });
+                            }
+                            
+                            if (!isVisible) return null;
+                            
+                            return (
+                              <div key={section.id} className="border rounded-lg p-4 space-y-4 bg-muted/20">
+                                <div className="border-b pb-2">
+                                  <h3 className="font-medium text-lg">{section.title}</h3>
+                                  {section.description && (
+                                    <p className="text-sm text-muted-foreground mt-1">{section.description}</p>
+                                  )}
+                                </div>
+                                {appealFormSettings?.fields && Array.isArray(appealFormSettings.fields) && appealFormSettings.fields.length > 0 &&
+                                  appealFormSettings.fields
+                                    .filter(field => field.sectionId === section.id)
+                                    .sort((a, b) => a.order - b.order)
+                                    .map(field => renderFormField(field))}
+                              </div>
+                            );
+                          })
+                          .filter(Boolean)}
+                      
+                      {/* Fields not in any section (should be minimal with new system) */}
+                      {appealFormSettings?.fields && Array.isArray(appealFormSettings.fields) &&
+                        appealFormSettings.fields
+                          .filter(field => !field.sectionId)
+                          .sort((a, b) => a.order - b.order)
+                          .map(field => renderFormField(field))}
+                      
+                      {/* Fallback reason field if no dynamic fields */}
+                      {(!appealFormSettings?.fields || !Array.isArray(appealFormSettings.fields) || appealFormSettings.fields.length === 0) && (
+                        <FormField
+                          control={appealForm.control}
+                          name="reason"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('appeals.appealReason')}</FormLabel>
+                              <FormControl>
+                                <Textarea
+                                  {...field}
+                                  placeholder={t('appeals.appealReasonPlaceholder')}
+                                  className="min-h-[120px]"
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t('appeals.appealReasonDesc')}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      )}
+                      
+                    </form>
+                  </Form>
+                    </CardContent>
+                    <CardFooter>
+                      <Button 
+                        type="submit" 
+                        className="w-full" 
+                        disabled={createAppealMutation.isPending}
+                        onClick={appealForm.handleSubmit(onAppealSubmit)}
+                      >
+                        {createAppealMutation.isPending ? t('playerTicket.submitting') : t('appeals.submitAppeal')}
+                      </Button>
+                    </CardFooter>
+                  </Card>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+export default AppealsPage;

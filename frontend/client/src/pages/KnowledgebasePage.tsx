@@ -1,0 +1,141 @@
+import React, { useState, useEffect } from 'react';
+import { Link } from 'wouter';
+import SearchBar from '@/components/knowledgebase/SearchBar';
+import CategoryDisplay from '@/components/knowledgebase/CategoryDisplay';
+import PageContainer from '@/components/layout/PageContainer';
+import { useTranslation } from 'react-i18next';
+import { errorMessageOr } from '@/utils/errors';
+
+interface ArticleStub {
+  id: string;
+  title: string;
+  slug: string;
+  ordinal: number;
+}
+
+interface CategoryWithArticles {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  ordinal: number;
+  articles: ArticleStub[];
+}
+
+const KnowledgebasePage: React.FC = () => {
+  const { t } = useTranslation();
+  const [categories, setCategories] = useState<CategoryWithArticles[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState<ArticleStub[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchCategories = async () => {
+      setIsLoading(true);
+      try {
+        const { getApiUrl } = await import('@/lib/api');
+        const response = await fetch(getApiUrl('/v1/public/knowledgebase/categories'), {
+          credentials: 'include',
+          headers: {  }
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        setCategories(Array.isArray(data.categories) ? data.categories : []);
+        setError(null);
+      } catch (e) {
+        setError(errorMessageOr(e, 'Failed to load categories.'));
+        console.error(e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchCategories();
+  }, []);
+
+  useEffect(() => {
+    if (searchTerm.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+
+    const handleSearch = async () => {
+      try {
+        const { getApiUrl } = await import('@/lib/api');
+        const response = await fetch(getApiUrl(`/v1/public/knowledgebase/search?q=${encodeURIComponent(searchTerm)}`), {
+          credentials: 'include',
+          headers: {  }
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        setSearchResults(Array.isArray(data.articles) ? data.articles : []);
+      } catch (e) {
+        console.error('Search failed:', e);
+        setSearchResults([]); // Clear results on error
+      }
+    };
+
+    const debounceSearch = setTimeout(() => {
+      handleSearch();
+    }, 300); // Debounce search requests
+
+    return () => clearTimeout(debounceSearch);
+  }, [searchTerm]);
+
+  if (isLoading) {
+    return <PageContainer><p>{t('pages.knowledgebase.loading')}</p></PageContainer>;
+  }
+
+  if (error) {
+    return <PageContainer><p>{t('pages.knowledgebase.loadError', { error })}</p></PageContainer>;
+  }
+
+  return (
+    <PageContainer>
+      <div className="container mx-auto p-4">
+        <h1 className="text-3xl font-bold mb-6 text-center">{t('pages.knowledgebase.title')}</h1>
+        
+        <SearchBar searchTerm={searchTerm} onSearchTermChange={setSearchTerm} />
+
+        {searchTerm.trim().length >= 2 && searchResults.length > 0 && (
+          <div className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">{t('pages.knowledgebase.searchResults')}</h2>
+            {searchResults.map(article => (
+              <div key={article.id} className="mb-2 p-3 border rounded hover:bg-muted/50">
+                <Link href={`/article/${article.slug}`} className="text-primary hover:underline">
+                  {article.title}
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {searchTerm.trim().length >= 2 && searchResults.length === 0 && (
+            <p>{t('pages.knowledgebase.noArticlesFound', { searchTerm })}</p>
+        )}
+
+        {!searchTerm && categories.length === 0 && (
+          <p className="text-center text-muted-foreground">{t('pages.knowledgebase.noCategories')}</p>
+        )}
+
+        {!searchTerm && categories.map(category => (
+          <CategoryDisplay
+            key={category.id}
+            id={category.id}
+            name={category.name}
+            slug={category.slug}
+            description={category.description}
+            articles={category.articles}
+          />
+        ))}
+      </div>
+    </PageContainer>
+  );
+};
+
+export default KnowledgebasePage;

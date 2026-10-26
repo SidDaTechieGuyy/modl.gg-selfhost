@@ -1,0 +1,316 @@
+import React, { useState } from 'react';
+import { Image as ImageIcon, Upload, Copy, Check, Trash2, Loader2 } from 'lucide-react';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { Label } from '@modl-gg/shared-web/components/ui/label';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@modl-gg/shared-web/components/ui/alert-dialog';
+import MediaUpload from './MediaUpload';
+import { useMediaUpload } from '@/hooks/use-media-upload';
+import { formatFileSize } from '@/utils/file-utils';
+import { useTranslation } from 'react-i18next';
+
+interface ArticleMedia {
+  id: string;
+  url: string;
+  key: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  uploadedAt: string;
+  altText?: string;
+}
+
+interface ArticleMediaUploadProps {
+  articleId?: string;
+  articleSlug?: string;
+  existingMedia?: ArticleMedia[];
+  onMediaUpdate?: (media: ArticleMedia[]) => void;
+  onInsertMedia?: (mediaUrl: string, altText?: string) => void;
+  readonly?: boolean;
+}
+
+export function ArticleMediaUpload({
+  articleId,
+  articleSlug,
+  existingMedia = [],
+  onMediaUpdate,
+  onInsertMedia,
+  readonly = false
+}: ArticleMediaUploadProps) {
+  const { t } = useTranslation();
+  const [media, setMedia] = useState<ArticleMedia[]>(existingMedia);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const { config, deleteMedia } = useMediaUpload();
+  const { toast } = useToast();
+
+  const handleUploadComplete = (result: { url: string; key: string }, file?: File) => {
+    // Use actual file info if available, otherwise extract from URL
+    const fileName = file?.name || result.url.split('/').pop() || 'uploaded-file';
+    
+    const newMedia: ArticleMedia = {
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      url: result.url,
+      key: result.key,
+      fileName: fileName,
+      fileType: file?.type || 'image/jpeg',
+      fileSize: file?.size || 0,
+      uploadedAt: new Date().toISOString(),
+      altText: fileName.split('.')[0] // Use filename without extension as default alt text
+    };
+
+    setMedia(prev => {
+      const updatedMedia = [...prev, newMedia];
+      onMediaUpdate?.(updatedMedia);
+      return updatedMedia;
+    });
+
+    toast({
+      title: t('upload.mediaUploaded'),
+      description: t('upload.uploadedSuccess', { name: fileName }),
+    });
+  };
+
+  const handleDeleteMedia = async (mediaItem: ArticleMedia) => {
+    setDeletingIds(prev => {
+      const next = new Set(prev);
+      next.add(mediaItem.id);
+      return next;
+    });
+    try {
+      await deleteMedia(mediaItem.key);
+      const updatedMedia = media.filter(m => m.id !== mediaItem.id);
+      setMedia(updatedMedia);
+      onMediaUpdate?.(updatedMedia);
+
+      toast({
+        title: t('upload.mediaDeleted'),
+        description: t('upload.deletedSuccess', { name: mediaItem.fileName }),
+      });
+    } catch (error) {
+      toast({
+        title: t('upload.deleteFailed'),
+        description: t('upload.deleteMediaFailed'),
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingIds(prev => {
+        const next = new Set(prev);
+        next.delete(mediaItem.id);
+        return next;
+      });
+    }
+  };
+
+  const handleCopyUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(null), 2000);
+      
+      toast({
+        title: t('upload.urlCopied'),
+        description: t('upload.urlCopiedDesc'),
+      });
+    } catch (error) {
+      toast({
+        title: t('upload.copyFailed'),
+        description: t('upload.copyUrlFailed'),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleInsertMedia = (mediaItem: ArticleMedia) => {
+    if (onInsertMedia) {
+      onInsertMedia(mediaItem.url, mediaItem.altText);
+      toast({
+        title: t('upload.mediaInserted'),
+        description: t('upload.mediaInsertedDesc', { name: mediaItem.fileName }),
+      });
+    }
+  };
+
+  const updateAltText = (mediaId: string, altText: string) => {
+    const updatedMedia = media.map(m => 
+      m.id === mediaId ? { ...m, altText } : m
+    );
+    setMedia(updatedMedia);
+    onMediaUpdate?.(updatedMedia);
+  };
+
+  const isImage = (type: string) => type.startsWith('image/');
+  const isVideo = (type: string) => type.startsWith('video/');
+
+  if (!config?.storageConfigured) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ImageIcon className="h-5 w-5" />
+            {t('upload.articleMedia')}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            {t('upload.storageNotConfigured')}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ImageIcon className="h-5 w-5" />
+          {t('upload.articleMedia')}
+          {media.length > 0 && (
+            <Badge variant="secondary">{media.length}</Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!readonly && (
+          <MediaUpload
+            uploadType="article"
+            onUploadComplete={handleUploadComplete}
+            metadata={{
+              articleId,
+              articleSlug
+            }}
+            variant="compact"
+            maxFiles={20}
+          />
+        )}
+
+        {media.length > 0 && (
+          <div className="space-y-4">
+            <h4 className="text-sm font-medium">{t('upload.uploadedMedia')}</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {media.map((item) => (
+                <Card key={item.id} className="overflow-hidden">
+                  <div className="aspect-video bg-muted flex items-center justify-center relative">
+                    {isImage(item.fileType) ? (
+                      <img 
+                        src={item.url} 
+                        alt={item.altText || item.fileName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : isVideo(item.fileType) ? (
+                      <video 
+                        src={item.url} 
+                        className="w-full h-full object-cover"
+                        controls
+                      />
+                    ) : (
+                      <div className="text-center">
+                        <ImageIcon className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                        <p className="text-xs text-muted-foreground">{t('upload.previewNotAvailable')}</p>
+                      </div>
+                    )}
+                    
+                    {!readonly && (
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="absolute top-2 right-2"
+                            aria-label="Delete media"
+                            disabled={deletingIds.has(item.id)}
+                          >
+                            {deletingIds.has(item.id) ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>{t('upload.deleteMediaTitle', 'Delete media?')}</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              {t('upload.deleteMediaConfirm', { name: item.fileName, defaultValue: 'This will permanently remove "{{name}}". Articles referencing this media will show a broken image.' })}
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => handleDeleteMedia(item)}
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            >
+                              {t('common.delete')}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    )}
+                  </div>
+                  
+                  <CardContent className="p-3 space-y-3">
+                    <div>
+                      <p className="text-sm font-medium truncate">{item.fileName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatFileSize(item.fileSize)} • {new Date(item.uploadedAt).toLocaleDateString()}
+                      </p>
+                    </div>
+
+                    {!readonly && (
+                      <div className="space-y-2">
+                        <Label htmlFor={`alt-${item.id}`} className="text-xs">
+                          {t('upload.altText')}
+                        </Label>
+                        <Input
+                          id={`alt-${item.id}`}
+                          value={item.altText || ''}
+                          onChange={(e) => updateAltText(item.id, e.target.value)}
+                          placeholder="Describe this image..."
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 h-8 text-xs"
+                        onClick={() => handleCopyUrl(item.url)}
+                      >
+                        {copiedUrl === item.url ? (
+                          <Check className="h-3 w-3 mr-1" />
+                        ) : (
+                          <Copy className="h-3 w-3 mr-1" />
+                        )}
+                        {copiedUrl === item.url ? t('common.copied') : t('upload.copyUrl')}
+                      </Button>
+                      
+                      {onInsertMedia && !readonly && (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="flex-1 h-8 text-xs"
+                          onClick={() => handleInsertMedia(item)}
+                        >
+                          <Upload className="h-3 w-3 mr-1" />
+                          {t('upload.insert')}
+                        </Button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default ArticleMediaUpload;

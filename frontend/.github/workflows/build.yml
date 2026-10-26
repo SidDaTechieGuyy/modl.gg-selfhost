@@ -1,0 +1,37 @@
+name: "Build (Pull Request)"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '23'
+
+    - name: Configure npm for Nexus
+      run: |
+        echo "//nexus.modl.gg/repository/npm-releases/:_auth=$(echo -n '${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASS }}' | base64)" >> ~/.npmrc
+        echo "//nexus.modl.gg/repository/npm-releases/:always-auth=true" >> ~/.npmrc
+        echo "@modl-gg:registry=https://nexus.modl.gg/repository/npm-releases/" >> ~/.npmrc
+
+    - name: Install dependencies
+      run: npm i
+
+    - name: Run build
+      run: npm run build

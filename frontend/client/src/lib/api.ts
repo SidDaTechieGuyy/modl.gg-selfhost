@@ -1,0 +1,127 @@
+import { ApiHttpError } from './http-error';
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+}
+
+function resolveApiBaseUrl(): string {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configuredBaseUrl && configuredBaseUrl.startsWith('/')) {
+    return normalizeBaseUrl(configuredBaseUrl);
+  }
+
+  // Default to same-origin API routing: https://<panel-domain>/api/v1/...
+  return '/api';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+
+export function getApiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE_URL}${normalizedPath}`;
+}
+
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
+
+export function getAvatarUrl(uuid: string, size: number = 32, _overlay: boolean = true): string {
+  return `https://mc-heads.net/avatar/${uuid}/${size}`;
+}
+
+type RequestMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+interface RequestOptions extends Omit<RequestInit, 'method' | 'body'> {
+  body?: unknown;
+}
+
+function resolveCredentials(_path: string, options?: RequestOptions): RequestCredentials {
+  if (options?.credentials) {
+    return options.credentials;
+  }
+
+  return 'include';
+}
+
+function createHeaders(options?: RequestOptions): Headers {
+  const headers = new Headers(options?.headers);
+
+
+  if (options?.body && (typeof options.body === 'object' || typeof options.body === 'string')) {
+    if (!headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+  }
+
+  return headers;
+}
+
+async function handleRateLimitIfNeeded(response: Response): Promise<void> {
+  if (response.status === 429) {
+    const { handleRateLimitResponse } = await import('../utils/rate-limit-handler');
+    await handleRateLimitResponse(response);
+    throw new ApiHttpError(response.status, response.statusText, 'Rate limit exceeded');
+  }
+}
+
+export async function apiFetch(
+  path: string,
+  options: RequestOptions & { method?: RequestMethod } = {}
+): Promise<Response> {
+  const { method = 'GET', body, ...rest } = options;
+  const fullUrl = getApiUrl(path);
+  const headers = createHeaders(options);
+
+  let processedBody: string | undefined;
+  if (body !== undefined && body !== null) {
+    processedBody = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+
+  const response = await fetch(fullUrl, {
+    ...rest,
+    method,
+    headers,
+    credentials: resolveCredentials(path, options),
+    body: processedBody,
+  });
+
+  await handleRateLimitIfNeeded(response);
+  return response;
+}
+
+export const api = {
+  get: (path: string, options?: RequestOptions) =>
+    apiFetch(path, { ...options, method: 'GET' }),
+
+  post: (path: string, body?: unknown, options?: RequestOptions) =>
+    apiFetch(path, { ...options, method: 'POST', body }),
+
+  put: (path: string, body?: unknown, options?: RequestOptions) =>
+    apiFetch(path, { ...options, method: 'PUT', body }),
+
+  patch: (path: string, body?: unknown, options?: RequestOptions) =>
+    apiFetch(path, { ...options, method: 'PATCH', body }),
+
+  delete: (path: string, options?: RequestOptions) =>
+    apiFetch(path, { ...options, method: 'DELETE' }),
+};
+
+export async function apiUpload(
+  path: string,
+  formData: FormData,
+  options?: Omit<RequestOptions, 'body'>
+): Promise<Response> {
+  const fullUrl = getApiUrl(path);
+  const headers = createHeaders(options);
+
+  const response = await fetch(fullUrl, {
+    ...options,
+    method: 'POST',
+    headers,
+    credentials: resolveCredentials(path, options),
+    body: formData,
+  });
+
+  await handleRateLimitIfNeeded(response);
+  return response;
+}

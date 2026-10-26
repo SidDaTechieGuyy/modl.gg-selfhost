@@ -1,0 +1,184 @@
+package gg.modl.backend.ticket.service;
+
+import gg.modl.backend.database.mongo.repository.PlayerMongoRepository;
+import gg.modl.backend.email.EmailAddressUtil;
+import gg.modl.backend.player.data.Player;
+import gg.modl.backend.player.service.SyncProtoFactory;
+import gg.modl.backend.realtime.publish.RealtimeEventPublisher;
+import gg.modl.backend.server.data.Server;
+import gg.modl.backend.ticket.data.Ticket;
+import gg.modl.backend.ticket.data.TicketCategory;
+import gg.modl.backend.infrastructure.util.UuidUtils;
+import gg.modl.backend.ticket.data.TicketReply;
+import gg.modl.proto.modl.v1.SyncPlayerNotification;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.web.util.HtmlUtils;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class TicketNotificationService {
+    private final PlayerMongoRepository playerRepository;
+    private final TicketAccessTokenService accessTokens;
+    @org.springframework.beans.factory.annotation.Value("${BASE_URL:http://localhost:8080}")
+    private String baseUrl;
+    private final RealtimeEventPublisher realtimeEventPublisher;
+    private final SyncProtoFactory syncProtoFactory;
+
+    @Async
+    public void notifyTicketReply(Server server, Ticket ticket, TicketReply reply) {
+        if (!reply.isStaff()) {
+            return;
+        }
+
+        String creatorUuid = ticket.getCreatorUuid();
+
+        if (creatorUuid != null && !creatorUuid.isBlank()) {
+            createInGameNotification(server, ticket, reply, creatorUuid);
+        }
+    }
+
+    private String buildTicketUrl(Server server, String ticketId) {
+        return accessTokens.accessLink(server, ticketId);
+    }
+
+    private String resolveTicketLabel(Ticket ticket) {
+        TicketCategory category = ticket.getType();
+        return category != null ? category.getDisplayName() : TicketCategory.SUPPORT.getDisplayName();
+    }
+
+    private void createInGameNotification(Server server, Ticket ticket, TicketReply reply, String playerUuid) {
+        try {
+            Player player = findPlayer(server, playerUuid);
+            if (player == null) {
+                log.debug("Player with UUID {} not found, skipping in-game notification", playerUuid);
+                return;
+            }
+
+            Map<String, Object> notificationData = buildNotificationData(server, ticket);
+            notificationData.put("replyAuthor", reply.getName());
+            Map<String, Object> notification = buildNotification("TICKET_REPLY", buildNotificationMessage(ticket, reply), notificationData);
+
+            appendNotification(server, player, notification);
+        } catch (Exception exception) {
+            log.error("Failed to create in-game notification for player {} for ticket {}: {}",
+                playerUuid, ticket.getId(), exception.getMessage());
+        }
+    }
+
+    private Player findPlayer(Server server, String playerUuid) {
+        return playerRepository.findByMinecraftUuid(server, UuidUtils.normalize(playerUuid)).orElse(null);
+    }
+
+    private void appendNotification(Server server, Player player, Map<String, Object> notification) {
+        if (player.getMinecraftUuid() != null) {
+            String playerUuid = player.getMinecraftUuid().toString();
+            notification.putIfAbsent("targetPlayerUuid", playerUuid);
+            playerRepository.pushPendingNotification(server, UuidUtils.normalize(playerUuid), notification);
+        }
+
+        pushPlayerNotification(server, notification);
+    }
+
+    private void pushPlayerNotification(Server server, Map<String, Object> notification) {
+        SyncPlayerNotification payload = syncProtoFactory.toPlayerNotification(notification);
+        realtimeEventPublisher.pushPlayerNotifications(server, List.of(payload));
+    }
+
+    private String buildNotificationMessage(Ticket ticket, TicketReply reply) {
+        String replyAuthor = reply.getName() != null ? reply.getName() : "Staff";
+        return String.format("%s replied to your ticket #%s", replyAuthor, ticket.getId());
+    }
+
+    private String getCreatorEmail(Ticket ticket) {
+        if (ticket.getData() == null) {
+            return null;
+        }
+        Object email = ticket.getData().get("creatorEmail");
+        if (email == null) {
+            return null;
+        }
+
+        String normalizedEmail = EmailAddressUtil.normalizeIfValid(email.toString());
+        if (normalizedEmail == null) {
+            log.warn("Skipping ticket email notification for {} due to invalid creator email: {}",
+                ticket.getId(),
+                email);
+            return null;
+        }
+
+        return normalizedEmail;
+    }
+
+    @Async
+    public void notifyTicketClosed(Server server, Ticket ticket) {
+        String creatorUuid = ticket.getCreatorUuid();
+
+        if (creatorUuid != null && !creatorUuid.isBlank()) {
+            createClosedInGameNotification(server, ticket, creatorUuid);
+        }
+    }
+
+    private void createClosedInGameNotification(Server server, Ticket ticket, String playerUuid) {
+        try {
+            Player player = findPlayer(server, playerUuid);
+            if (player == null) {
+                return;
+            }
+
+            Map<String, Object> notification = buildNotification(
+                "TICKET_CLOSED",
+                String.format("Your ticket #%s has been closed", ticket.getId()),
+                buildNotificationData(server, ticket));
+
+            appendNotification(server, player, notification);
+        } catch (Exception exception) {
+            log.error("Failed to create in-game closed notification for player {} for ticket {}: {}",
+                playerUuid, ticket.getId(), exception.getMessage());
+        }
+    }
+
+    private EscapedTicketHeader buildEscapedHeader(Server server, Ticket ticket) {
+        String serverName = HtmlUtils.htmlEscape(server.getServerName() != null ? server.getServerName() : "Server");
+        String playerName = HtmlUtils.htmlEscape(ticket.getCreatorName() != null ? ticket.getCreatorName() : "Player");
+        String ticketType = HtmlUtils.htmlEscape(resolveTicketLabel(ticket));
+        String ticketId = HtmlUtils.htmlEscape(ticket.getId());
+        String ticketSubject = HtmlUtils.htmlEscape(ticket.getSubject() != null ? ticket.getSubject() : "No Subject");
+        String ticketUrl = buildTicketUrl(server, ticketId);
+        return new EscapedTicketHeader(serverName, playerName, ticketType, ticketId, ticketSubject, ticketUrl);
+    }
+
+    private Map<String, Object> buildNotification(String type, String message, Map<String, Object> data) {
+        Map<String, Object> notification = new LinkedHashMap<>();
+        notification.put("id", UUID.randomUUID().toString());
+        notification.put("type", type);
+        notification.put("message", message);
+        notification.put("timestamp", System.currentTimeMillis());
+        notification.put("data", data);
+        return notification;
+    }
+
+    private Map<String, Object> buildNotificationData(Server server, Ticket ticket) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("ticketId", ticket.getId());
+        data.put("ticketUrl", buildTicketUrl(server, ticket.getId()));
+        return data;
+    }
+
+    private record EscapedTicketHeader(
+        String serverName,
+        String playerName,
+        String ticketType,
+        String ticketId,
+        String ticketSubject,
+        String ticketUrl
+    ) {
+    }
+}

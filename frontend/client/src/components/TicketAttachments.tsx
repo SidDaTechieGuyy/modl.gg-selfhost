@@ -1,0 +1,388 @@
+import React, { useState } from 'react';
+import { Paperclip, Download, Eye, Trash2, FileText, Image, Video, File, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@modl-gg/shared-web/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@modl-gg/shared-web/components/ui/alert-dialog';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import MediaUpload from './MediaUpload';
+import { useMediaUpload } from '@/hooks/use-media-upload';
+import { formatFileSize } from '@/utils/file-utils';
+import { normalizeCdnHost, isTrustedCdnUrl as isUrlOnTrustedCdn } from '@/utils/evidence-utils';
+
+interface TicketAttachment {
+  id: string;
+  url: string;
+  key: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
+interface TicketAttachmentsProps {
+  ticketId: string;
+  ticketType?: string;
+  existingAttachments?: TicketAttachment[];
+  onAttachmentsUpdate?: (attachments: TicketAttachment[]) => void;
+  readonly?: boolean;
+  showTitle?: boolean;
+  publicMode?: boolean; // When true, disables delete functionality
+}
+
+export function TicketAttachments({
+  ticketId,
+  ticketType = 'general',
+  existingAttachments = [],
+  onAttachmentsUpdate,
+  readonly = false,
+  showTitle = true,
+  compact = false,
+  publicMode = false
+}: TicketAttachmentsProps & { compact?: boolean }) {
+  const { t } = useTranslation();
+  const [attachments, setAttachments] = useState<TicketAttachment[]>(existingAttachments);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const { config, deleteMedia } = useMediaUpload();
+  const { toast } = useToast();
+
+  const handleUploadComplete = (result: { url: string; key: string }, file?: File) => {
+    // Use actual file info if available, otherwise extract from URL
+    const fileName = file?.name || result.url.split('/').pop() || 'uploaded-file';
+    
+    const newAttachment: TicketAttachment = {
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      url: result.url,
+      key: result.key,
+      fileName: fileName,
+      fileType: file?.type || 'application/octet-stream',
+      fileSize: file?.size || 0,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: 'Current User' // This should come from auth context
+    };
+
+    setAttachments(prev => {
+      const updatedAttachments = [...prev, newAttachment];
+      onAttachmentsUpdate?.(updatedAttachments);
+      return updatedAttachments;
+    });
+
+    toast({
+      title: t('upload.attachmentUploaded'),
+      description: t('upload.uploadedSuccess', { name: fileName }),
+    });
+  };
+
+  const handleDeleteAttachment = async (attachment: TicketAttachment) => {
+    if (publicMode) {
+      // In public mode, just remove from local state (no server deletion)
+      const updatedAttachments = attachments.filter(a => a.id !== attachment.id);
+      setAttachments(updatedAttachments);
+      onAttachmentsUpdate?.(updatedAttachments);
+
+      toast({
+        title: t('upload.attachmentRemoved'),
+        description: t('upload.attachmentRemovedDesc', { name: attachment.fileName }),
+      });
+      return;
+    }
+
+    setDeletingIds(prev => {
+      const next = new Set(prev);
+      next.add(attachment.id);
+      return next;
+    });
+    try {
+      await deleteMedia(attachment.key);
+      const updatedAttachments = attachments.filter(a => a.id !== attachment.id);
+      setAttachments(updatedAttachments);
+      onAttachmentsUpdate?.(updatedAttachments);
+
+      toast({
+        title: t('upload.attachmentDeleted'),
+        description: t('upload.deletedSuccess', { name: attachment.fileName }),
+      });
+    } catch (error) {
+      toast({
+        title: t('upload.deleteFailed'),
+        description: t('upload.deleteAttachmentFailed'),
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingIds(prev => {
+        const next = new Set(prev);
+        next.delete(attachment.id);
+        return next;
+      });
+    }
+  };
+
+  const getFileIcon = (type: string) => {
+    if (type.startsWith('image/')) return <Image className="h-4 w-4" />;
+    if (type.startsWith('video/')) return <Video className="h-4 w-4" />;
+    if (type === 'application/pdf') return <FileText className="h-4 w-4" />;
+    return <File className="h-4 w-4" />;
+  };
+
+  const isImage = (type: string) => type.startsWith('image/');
+  const isVideo = (type: string) => type.startsWith('video/');
+  const isPdf = (type: string) => type === 'application/pdf';
+
+  const normalizedCdnHost = normalizeCdnHost(config?.cdnDomain);
+
+  const isTrustedCdnUrl = (url: string) => isUrlOnTrustedCdn(url, normalizedCdnHost);
+
+  if (!config?.storageConfigured) {
+    return (
+      <div className="p-4 bg-muted/50 rounded-lg">
+        <p className="text-sm text-muted-foreground">
+          {t('upload.attachmentsNotAvailable')}
+        </p>
+      </div>
+    );
+  }
+
+  const content = (
+    <div className={compact ? "flex items-center gap-2" : "space-y-4"}>
+      {!readonly && (
+        <MediaUpload
+          uploadType="ticket"
+          onUploadComplete={handleUploadComplete}
+          metadata={{
+            ticketId,
+            ticketType
+          }}
+          variant={compact ? "button-only" : "compact"}
+          maxFiles={10}
+        />
+      )}
+
+      {attachments.length > 0 && (
+        <div className={compact ? "flex items-center gap-2 flex-wrap" : "space-y-2"}>
+          {!compact && showTitle && <h4 className="text-sm font-medium">{t('upload.attachments')}</h4>}
+          {compact ? (
+            <>
+              {attachments.map((attachment) => {
+                // Truncate filename to max 20 characters
+                const truncatedName = attachment.fileName.length > 20 
+                  ? attachment.fileName.substring(0, 17) + '...'
+                  : attachment.fileName;
+                
+                return (
+                  <Badge 
+                    key={attachment.id} 
+                    variant="secondary" 
+                    className="flex items-center gap-1 max-w-fit"
+                  >
+                    {getFileIcon(attachment.fileType)}
+                    <span className="text-xs">{truncatedName}</span>
+                    {!readonly && (
+                      publicMode ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAttachment(attachment)}
+                          aria-label={`Remove ${attachment.fileName}`}
+                          className="ml-1 hover:bg-destructive/10 rounded-sm p-0.5"
+                          title={`Remove ${attachment.fileName}`}
+                        >
+                          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                        </button>
+                      ) : (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={`Delete ${attachment.fileName}`}
+                              disabled={deletingIds.has(attachment.id)}
+                              className="ml-1 hover:bg-destructive/10 rounded-sm p-0.5 disabled:opacity-50"
+                              title={`Delete ${attachment.fileName}`}
+                            >
+                              {deletingIds.has(attachment.id) ? (
+                                <Loader2 className="h-3 w-3 text-muted-foreground animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                              )}
+                            </button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>{t('upload.deleteAttachmentTitle', 'Delete attachment?')}</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                {t('upload.deleteAttachmentConfirm', { name: attachment.fileName, defaultValue: 'This will permanently remove "{{name}}". This action cannot be undone.' })}
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => handleDeleteAttachment(attachment)}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                {t('common.delete')}
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )
+                    )}
+                  </Badge>
+                );
+              })}
+            </>
+          ) : (
+            <>
+              {attachments.map((attachment) => (
+            <div
+              key={attachment.id}
+              className="flex items-center justify-between p-3 bg-muted/50 rounded-lg"
+            >
+              <div className="flex items-center gap-3 flex-1">
+                {getFileIcon(attachment.fileType)}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{attachment.fileName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatFileSize(attachment.fileSize)} • {new Date(attachment.uploadedAt).toLocaleDateString()}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button variant="ghost" size="sm">
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-4xl">
+                    <DialogHeader>
+                      <DialogTitle>{attachment.fileName}</DialogTitle>
+                      <DialogDescription className="sr-only">
+                        {t('common.attachmentPreviewDesc')}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="mt-4">
+                      {isImage(attachment.fileType) && isTrustedCdnUrl(attachment.url) ? (
+                        <img 
+                          src={attachment.url} 
+                          alt={attachment.fileName}
+                          className="max-w-full h-auto rounded-lg"
+                        />
+                      ) : isVideo(attachment.fileType) && isTrustedCdnUrl(attachment.url) ? (
+                        <video 
+                          src={attachment.url} 
+                          controls 
+                          className="max-w-full h-auto rounded-lg"
+                        />
+                      ) : isPdf(attachment.fileType) && isTrustedCdnUrl(attachment.url) ? (
+                        <iframe
+                          src={attachment.url}
+                          className="w-full h-96 rounded-lg"
+                          title={attachment.fileName}
+                        />
+                      ) : (
+                        <div className="p-8 text-center">
+                          <File className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                          <p className="text-sm text-muted-foreground mb-4">
+                            {t('upload.previewNotAvailable')}
+                          </p>
+                          <Button asChild>
+                            <a href={attachment.url} target="_blank" rel="noopener noreferrer">
+                              <Download className="h-4 w-4 mr-2" />
+                              {t('upload.downloadFile')}
+                            </a>
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </DialogContent>
+                </Dialog>
+
+                <Button variant="ghost" size="sm" asChild>
+                  <a href={attachment.url} target="_blank" rel="noopener noreferrer">
+                    <Download className="h-4 w-4" />
+                  </a>
+                </Button>
+
+                {!readonly && (
+                  publicMode ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteAttachment(attachment)}
+                      aria-label="Remove attachment"
+                      title="Remove attachment"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label="Delete attachment"
+                          title="Delete attachment"
+                          disabled={deletingIds.has(attachment.id)}
+                        >
+                          {deletingIds.has(attachment.id) ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>{t('upload.deleteAttachmentTitle', 'Delete attachment?')}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t('upload.deleteAttachmentConfirm', { name: attachment.fileName, defaultValue: 'This will permanently remove "{{name}}". This action cannot be undone.' })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleDeleteAttachment(attachment)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            {t('common.delete')}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )
+                )}
+              </div>
+            </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  if (showTitle) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Paperclip className="h-5 w-5" />
+            {t('upload.attachments')}
+            {attachments.length > 0 && (
+              <Badge variant="secondary">{attachments.length}</Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {content}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return content;
+}
+
+export default TicketAttachments;

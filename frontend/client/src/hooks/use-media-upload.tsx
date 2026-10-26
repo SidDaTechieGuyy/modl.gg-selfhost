@@ -1,0 +1,327 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiFetch } from '@/lib/api';
+import { isPublicPage } from '@/utils/routes';
+
+export interface MediaUploadConfig {
+  storageConfigured: boolean;
+  cdnDomain: string | null;
+  supportedTypes: {
+    evidence: string[];
+    tickets: string[];
+    appeals: string[];
+    articles: string[];
+    'server-icons': string[];
+    replays: string[];
+  };
+  fileSizeLimits: {
+    evidence: number;
+    tickets: number;
+    appeals: number;
+    articles: number;
+    'server-icons': number;
+    replays: number;
+  };
+}
+
+interface PresignResponse {
+  presignedUrl: string;
+  key: string;
+  expiresAt: string;
+  method: string;
+  requiredHeaders: Record<string, string>;
+}
+
+interface ConfirmResponse {
+  key: string;
+  url: string;
+  fileName: string;
+  size: number;
+  contentType: string;
+}
+
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+  percentage: number;
+}
+
+interface UploadMetadata {
+  entityId?: string;
+  ticketId?: string;
+  appealId?: string;
+  accessToken?: string;
+  ticketToken?: string;
+}
+
+const MEDIA_CONFIG_QUERY_KEY = ['/v1/media/config'];
+
+async function fetchMediaConfig(): Promise<MediaUploadConfig> {
+  const isPublic = isPublicPage();
+
+  try {
+    if (isPublic) {
+      const publicResponse = await apiFetch('/v1/public/media/config');
+      if (publicResponse.ok) {
+        return publicResponse.json();
+      }
+    } else {
+      const response = await apiFetch('/v1/panel/media/config');
+      if (response.ok) {
+        return response.json();
+      }
+      if (response.status === 401) {
+        const publicResponse = await apiFetch('/v1/public/media/config');
+        if (publicResponse.ok) {
+          return publicResponse.json();
+        }
+      }
+    }
+    throw new Error('Failed to fetch media upload configuration from all available endpoints');
+  } catch (error) {
+    try {
+      const fallbackUrl = isPublic ? '/v1/panel/media/config' : '/v1/public/media/config';
+      const fallbackResponse = await apiFetch(fallbackUrl);
+      if (fallbackResponse.ok) {
+        return fallbackResponse.json();
+      }
+    } catch (fallbackError) {
+      return {
+        storageConfigured: false,
+        cdnDomain: null,
+        supportedTypes: {
+          evidence: [],
+          tickets: [],
+          appeals: [],
+          articles: [],
+          'server-icons': [],
+          replays: []
+        },
+        fileSizeLimits: {
+          evidence: 0,
+          tickets: 0,
+          appeals: 0,
+          articles: 0,
+          'server-icons': 0,
+          replays: 0
+        }
+      };
+    }
+    throw error;
+  }
+}
+
+export function useMediaUploadConfig() {
+  return useQuery<MediaUploadConfig>({
+    queryKey: MEDIA_CONFIG_QUERY_KEY,
+    queryFn: fetchMediaConfig,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+function getEndpointPrefix(): string {
+  return isPublicPage() ? '/v1/public/media' : '/v1/panel/media';
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  const target = `${name}=`;
+  const match = document.cookie
+    .split(';')
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(target));
+
+  if (!match) {
+    return null;
+  }
+
+  return decodeURIComponent(match.slice(target.length));
+}
+
+function resolveUploadContext(metadata: UploadMetadata = {}): { entityId?: string; accessToken?: string } {
+  const rawEntityId = metadata.entityId
+    || metadata.ticketId
+    || metadata.appealId;
+  const entityId = rawEntityId?.trim();
+
+  let accessToken = metadata.accessToken || metadata.ticketToken;
+  if (!accessToken && entityId) {
+    const normalized = entityId.toLowerCase();
+    if (normalized !== 'new' && normalized !== 'unknown') {
+      accessToken = getCookieValue(`ticket_auth_${entityId}`) ?? undefined;
+    }
+  }
+
+  return {
+    entityId: entityId || undefined,
+    accessToken: accessToken || undefined,
+  };
+}
+
+async function getPresignedUrl(
+  file: File,
+  uploadType: string,
+  metadata: UploadMetadata = {}
+): Promise<PresignResponse> {
+  const endpoint = `${getEndpointPrefix()}/presign`;
+  const context = resolveUploadContext(metadata);
+
+  const payload: Record<string, unknown> = {
+    uploadType,
+    fileName: file.name,
+    fileSize: file.size,
+    contentType: file.type,
+  };
+  if (context.entityId) {
+    payload.entityId = context.entityId;
+  }
+  if (context.accessToken) {
+    payload.accessToken = context.accessToken;
+  }
+  
+  const response = await apiFetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to get upload URL');
+  }
+
+  return response.json();
+}
+
+async function uploadToStorage(
+  presignedUrl: string,
+  file: File,
+  requiredHeaders: Record<string, string>,
+  onProgress?: (progress: UploadProgress) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percentage: Math.round((event.loaded / event.total) * 100),
+        });
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed with status ${xhr.status}: ${xhr.statusText}`));
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('Upload failed due to network error'));
+    });
+
+    xhr.addEventListener('abort', () => {
+      reject(new Error('Upload was aborted'));
+    });
+
+    xhr.open('PUT', presignedUrl, true);
+
+    const unsafeHeaders = ['content-length', 'host', 'connection', 'accept-encoding'];
+    Object.entries(requiredHeaders).forEach(([key, value]) => {
+      if (!unsafeHeaders.includes(key.toLowerCase())) {
+        xhr.setRequestHeader(key, value);
+      }
+    });
+
+    xhr.send(file);
+  });
+}
+
+async function confirmUpload(key: string, metadata: UploadMetadata = {}): Promise<ConfirmResponse> {
+  const endpoint = `${getEndpointPrefix()}/confirm`;
+  const context = resolveUploadContext(metadata);
+  const payload: Record<string, string> = { key };
+  if (context.accessToken) {
+    payload.accessToken = context.accessToken;
+  }
+  
+  const response = await apiFetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || errorData.message || 'Failed to confirm upload');
+  }
+
+  return response.json();
+}
+
+export function useMediaUpload() {
+  const config = useMediaUploadConfig();
+  const queryClient = useQueryClient();
+
+  const uploadMedia = async (
+    file: File,
+    uploadType: 'evidence' | 'ticket' | 'appeal' | 'article' | 'server-icon',
+    metadata: Record<string, unknown> = {},
+    onProgress?: (progress: UploadProgress) => void
+  ): Promise<{ url: string; key: string }> => {
+    let currentConfig = queryClient.getQueryData<MediaUploadConfig>(MEDIA_CONFIG_QUERY_KEY);
+
+    if (!currentConfig || !currentConfig.storageConfigured) {
+      currentConfig = await fetchMediaConfig();
+      queryClient.setQueryData(MEDIA_CONFIG_QUERY_KEY, currentConfig);
+    }
+
+    if (!currentConfig?.storageConfigured) {
+      throw new Error('Local storage is unavailable. Check backend logs and upload volume permissions.');
+    }
+
+    const presign = await getPresignedUrl(file, uploadType, metadata as UploadMetadata);
+
+    await uploadToStorage(presign.presignedUrl, file, presign.requiredHeaders, onProgress);
+
+    const confirmed = await confirmUpload(presign.key, metadata as UploadMetadata);
+
+    return { url: confirmed.url, key: confirmed.key };
+  };
+
+  const deleteMedia = async (key: string): Promise<void> => {
+    // Storage keys are multi-segment ({databaseName}/{type}/...). encodeURIComponent on the
+    // whole key turns every '/' into %2F, which the backend's {*key} path-capture route + Tomcat
+    // (encoded-slash REJECT by default) refuse. Encode each segment individually so the literal
+    // '/' separators survive for the catch-all capture. Use getEndpointPrefix() for parity with
+    // the rest of the hook (panel vs public) instead of hardcoding the panel prefix.
+    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    const response = await apiFetch(`${getEndpointPrefix()}/${encodedKey}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Delete failed');
+    }
+  };
+
+  return {
+    config: config.data,
+    isConfigLoading: config.isLoading,
+    configError: config.error,
+    uploadMedia,
+    deleteMedia,
+  };
+}

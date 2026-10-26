@@ -1,0 +1,215 @@
+import { Card, CardContent, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
+import { Badge } from '@modl-gg/shared-web/components/ui/badge';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Bell, Clock, User, MessageSquare, X, UserMinus } from 'lucide-react';
+import { useLocation } from 'wouter';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { formatTimeAgo } from '@/utils/date-utils';
+import { useTranslation } from 'react-i18next';
+import { StatusBadge } from '@/components/ui/status-badge';
+
+export interface TicketSubscriptionUpdate {
+  id: string;
+  ticketId: string;
+  ticketTitle: string;
+  replyContent: string;
+  replyBy: string;
+  replyAt: string;
+  isStaffReply: boolean;
+  isRead: boolean;
+  additionalCount?: number;
+}
+
+interface TicketSubscriptionsSectionProps {
+  updates: TicketSubscriptionUpdate[];
+  loading: boolean;
+  onUnsubscribe: (ticketId: string) => Promise<void>;
+  onDismissTicket: (ticketId: string) => Promise<void>;
+}
+
+export function TicketSubscriptionsSection({
+  updates,
+  loading,
+  onUnsubscribe,
+  onDismissTicket
+}: TicketSubscriptionsSectionProps) {
+  const { t } = useTranslation();
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  const handleTicketClick = (ticketId: string) => {
+    setLocation(`/panel/tickets/${ticketId}`);
+  };
+
+  const handleUnsubscribe = async (ticketId: string, ticketTitle: string) => {
+    try {
+      await onUnsubscribe(ticketId);
+      toast({
+        title: t('dashboard.subscriptions.unsubscribed'),
+        description: t('dashboard.subscriptions.unsubscribedDesc', { title: ticketTitle }),
+      });
+    } catch (error) {
+      toast({
+        title: t('toast.error'),
+        description: t('dashboard.subscriptions.unsubscribeError'),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDismissTicket = async (ticketId: string) => {
+    try {
+      await onDismissTicket(ticketId);
+    } catch {
+    }
+  };
+
+  const truncateContent = (content: string | undefined | null, maxLength: number = 100) => {
+    if (!content) return t('dashboard.subscriptions.noContent');
+    const contentStr = String(content);
+    if (contentStr.length <= maxLength) return contentStr;
+    return contentStr.substring(0, maxLength) + '...';
+  };
+
+  if (loading) {
+    return (
+      <Card className="shadow-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="h-5 w-5" />
+            {t('dashboard.subscriptions.title')}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="p-3 border border-border rounded-lg">
+                <div className="animate-pulse">
+                  <div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
+                  <div className="h-3 bg-muted rounded w-full mb-2"></div>
+                  <div className="h-3 bg-muted rounded w-1/2"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Backend now only returns unread updates, so all updates are unread
+  const hasUnreadUpdates = updates.length > 0;
+
+  return (
+    <Card className="shadow-card">
+      <CardHeader>
+        <div className="flex justify-between items-center">
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="h-5 w-5" />
+            {t('dashboard.subscriptions.title')}
+            {hasUnreadUpdates && (
+              <Badge variant="destructive" className="text-xs">
+                {t('dashboard.subscriptions.newCount', { count: updates.length })}
+              </Badge>
+            )}
+          </CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          {/* Recent Updates */}
+          <div>
+            <h4 className="text-sm font-medium mb-3">{t('dashboard.subscriptions.recentReplies')}</h4>
+            <div className="space-y-3">
+              {updates.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground text-sm">
+                  {t('dashboard.subscriptions.empty')}
+                </div>
+              ) : (
+                updates.slice(0, 5).map((update) => (
+                  <div
+                    key={update.id}
+                    className="p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer bg-info/5 border-info/20"
+                    onClick={() => {
+                      handleTicketClick(update.ticketId);
+                    }}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h5 className="font-medium text-sm line-clamp-1 flex-1 pr-2">
+                        {update.ticketTitle}
+                      </h5>
+                      <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                        <div className="w-2 h-2 bg-info rounded-full"></div>
+                        <StatusBadge
+                          intent={update.isStaffReply ? 'success' : 'info'}
+                          className="text-xs"
+                        >
+                          {update.isStaffReply ? t('dashboard.subscriptions.staff') : t('dashboard.subscriptions.player')}
+                        </StatusBadge>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-info"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDismissTicket(update.ticketId);
+                          }}
+                          title="Dismiss all updates for this ticket"
+                          aria-label="Dismiss all updates for this ticket"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnsubscribe(update.ticketId, update.ticketTitle);
+                          }}
+                          title="Unsubscribe"
+                          aria-label="Unsubscribe"
+                        >
+                          <UserMinus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                    
+                    <p className="text-sm text-muted-foreground mb-2 line-clamp-2">
+                      {truncateContent(update.replyContent)}
+                    </p>
+                    
+                    {update.additionalCount && update.additionalCount > 0 && (
+                      <div className="mb-2">
+                        <Badge variant="outline" className="text-xs">
+                          {t('dashboard.subscriptions.andMore', { count: update.additionalCount })}
+                        </Badge>
+                      </div>
+                    )}
+                    
+                    <div className="flex justify-between items-center text-xs text-muted-foreground">
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-1">
+                          <User className="h-3 w-3" />
+                          <span>{update.replyBy}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          <span>{formatTimeAgo(update.replyAt)}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <MessageSquare className="h-3 w-3" />
+                        <span>{t('dashboard.subscriptions.reply')}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

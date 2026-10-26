@@ -1,0 +1,133 @@
+package gg.modl.backend.player.service;
+import gg.modl.backend.player.dto.response.SyncResult;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import gg.modl.backend.database.mongo.repository.MigrationMongoRepository;
+import gg.modl.backend.database.mongo.repository.PlayerMongoRepository;
+import gg.modl.backend.database.mongo.repository.ServerInstanceSnapshotMongoRepository;
+import gg.modl.backend.database.mongo.repository.ServerActivityRepository;
+import gg.modl.backend.database.mongo.repository.StaffMongoRepository;
+import gg.modl.backend.server.data.Server;
+import gg.modl.backend.settings.service.PunishmentTypeService;
+import java.util.Collection;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+@ExtendWith(MockitoExtension.class)
+class MinecraftSyncServiceTest {
+
+    @Mock
+    private PlayerMongoRepository playerRepository;
+
+    @Mock
+    private StaffMongoRepository staffRepository;
+
+    @Mock
+    private ServerActivityRepository serverRepository;
+
+    @Mock
+    private MigrationMongoRepository migrationRepository;
+
+    @Mock
+    private ServerInstanceSnapshotMongoRepository serverInstanceSnapshotRepository;
+
+    @Mock
+    private PlayerStatusCalculator statusCalculator;
+
+    @Mock
+    private PunishmentTypeService punishmentTypeService;
+
+    @Mock
+    private PunishmentLifecycleService punishmentLifecycleService;
+
+    @Mock
+    private MinecraftChatLogService minecraftChatLogService;
+
+    @Mock
+    private IssuerNameResolver issuerNameResolver;
+
+    @Mock
+    private SyncStaffEventService syncStaffEventService;
+
+    @Mock
+    private SyncActiveStaffService syncActiveStaffService;
+
+    private MinecraftSyncService minecraftSyncService;
+
+    @BeforeEach
+    void setUp() {
+        minecraftSyncService = new MinecraftSyncService(
+            playerRepository,
+            staffRepository,
+            serverRepository,
+            migrationRepository,
+            serverInstanceSnapshotRepository,
+            statusCalculator,
+            punishmentTypeService,
+            punishmentLifecycleService,
+            minecraftChatLogService,
+            issuerNameResolver,
+            syncStaffEventService,
+            syncActiveStaffService
+        );
+    }
+
+    @Test
+    void syncReturnsEnvelopeWhenNoPlayersAreOnline() {
+        Server server = new Server("server", "db", "admin@example.com");
+
+        when(punishmentTypeService.getPunishmentTypes(server)).thenReturn(List.of());
+        when(syncStaffEventService.collectStaffEvents(eq(server), any(), any(), any())).thenReturn(List.of());
+
+        SyncResult response = minecraftSyncService.sync(
+            server,
+            "2025-01-01T00:00:00Z",
+            List.of(),
+            "lobby",
+            List.of(),
+            List.of(),
+            null,
+            null
+        );
+
+        assertNotNull(response.timestamp());
+        assertNotNull(response.data());
+        assertNotNull(response.data().pendingPunishments());
+        assertNotNull(response.data().staffNotifications());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void syncLowercasesOnlineUuidsBeforeQueryingRepositories() {
+        Server server = new Server("server", "db", "admin@example.com");
+
+        when(punishmentTypeService.getPunishmentTypes(server)).thenReturn(List.of());
+        when(playerRepository.findByMinecraftUuids(eq(server), any(Collection.class))).thenReturn(List.of());
+
+        minecraftSyncService.sync(
+            server,
+            "2025-01-01T00:00:00Z",
+            List.of(new MinecraftSyncService.OnlinePlayerInput("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "PlayerOne", "1.2.3.4")),
+            "lobby",
+            List.of(),
+            List.of(),
+            null,
+            null
+        );
+
+        ArgumentCaptor<Collection<String>> uuidsCaptor = ArgumentCaptor.forClass(Collection.class);
+        verify(playerRepository).findByMinecraftUuids(eq(server), uuidsCaptor.capture());
+        assertTrue(uuidsCaptor.getValue().contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
+    }
+}

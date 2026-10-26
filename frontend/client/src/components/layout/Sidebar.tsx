@@ -1,0 +1,675 @@
+import { useLocation } from "wouter";
+import { cn } from "@/lib/utils";
+import { useSidebar } from "@/hooks/use-sidebar";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import {
+  Home,
+  Search,
+  Ticket,
+  FileText,
+  Settings,
+  Loader2,
+} from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@modl-gg/shared-web/components/ui/tooltip";
+import { Button } from "@modl-gg/shared-web/components/ui/button";
+import { Input } from "@modl-gg/shared-web/components/ui/input";
+import { useDashboard } from "@/contexts/DashboardContext";
+import { usePlayerWindow } from "@/contexts/PlayerWindowContext";
+import serverLogo from "../../assets/server-logo.png";
+import { usePublicSettings } from "@/hooks/use-public-settings";
+import { usePunishmentLookup } from "@/hooks/use-player-lookup";
+import { usePermissions, PERMISSIONS } from "@/hooks/use-permissions";
+import { usePlayerSearch } from "@/hooks/use-data";
+import { queryClient } from "@/lib/queryClient";
+import { protoFetch } from "@/lib/proto-fetch";
+import { toNum } from "@/lib/proto-ui";
+import {
+  DashboardRecentTicketsResponseSchema,
+  DashboardRecentPunishmentsResponseSchema,
+} from "@modl-gg/proto/modl/v1/dashboard_pb.ts";
+import { PaginatedTicketsResponseSchema } from "@modl-gg/proto/modl/v1/ticket_pb.ts";
+import { PanelPunishmentTypesResponseSchema } from "@modl-gg/proto/modl/v1/settings_pb.ts";
+
+interface Player {
+  uuid?: string;
+  minecraftUuid?: string;
+  username?: string;
+  status?: string;
+  lastOnline?: string;
+  isOnline?: boolean;
+  online?: boolean;
+  data?: { isOnline?: boolean };
+}
+
+const HOME_ICON = <Home className="h-5 w-5" />;
+const SEARCH_ICON = <Search className="h-5 w-5" />;
+const TICKET_ICON = <Ticket className="h-5 w-5" />;
+const AUDIT_ICON = <FileText className="h-5 w-5" />;
+const SETTINGS_ICON = <Settings className="h-5 w-5" />;
+
+const Sidebar = () => {
+  const { t } = useTranslation();
+  const { setIsSearchActive } = useSidebar();
+  const { openLookupWindow: openDashboardLookupWindow } = useDashboard();
+  const { openPlayerWindow: openPlayerWindowFromContext } = usePlayerWindow();
+  const [location, navigate] = useLocation();
+  const { data: publicSettings } = usePublicSettings();
+  const { hasPermission, isPermissionsLoading } = usePermissions();
+  const [isLookupOpen, setIsLookupOpen] = useState(false);
+  const [isLookupClosing, setIsLookupClosing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [, setIsFocused] = useState(false);
+  const [isHoveringSearch, setIsHoveringSearch] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<Array<{player: Player, timestamp: number}>>([]);
+  
+  // Detect if search query starts with # for punishment lookup
+  const isPunishmentLookup = searchQuery.trim().startsWith('#');
+  const punishmentQuery = isPunishmentLookup ? searchQuery.trim().substring(1) : '';
+  const debouncedPunishmentQuery = isPunishmentLookup && punishmentQuery.length > 0 ? punishmentQuery : "";
+  
+  // Lookup punishment if the query looks like a punishment ID
+  const { 
+    data: punishmentLookupResult, 
+    isLoading: isPunishmentLoading, 
+    error: punishmentError 
+  } = usePunishmentLookup(debouncedPunishmentQuery);
+
+  // Load recent searches from localStorage on mount
+  useEffect(() => {
+    const savedSearches = localStorage.getItem('recentPlayerSearches');
+    if (savedSearches) {
+      try {
+        const parsed = JSON.parse(savedSearches);
+        if (Array.isArray(parsed)) {
+          setRecentSearches(parsed);
+        }
+      } catch {
+      }
+    }
+  }, []);
+
+  // Helper function to get player UUID (handling both uuid and minecraftUuid fields)
+  const getPlayerUuid = (player: Player): string => {
+    return player.minecraftUuid || player.uuid || '';
+  };
+
+  // Function to handle player selection and update recent searches
+  const handlePlayerSelect = (player: Player) => {
+    const uuid = getPlayerUuid(player);
+
+    if (!uuid) return; // Guard against empty UUID
+
+    // Update recent searches
+    const timestamp = Date.now();
+    const existing = recentSearches.filter(s => getPlayerUuid(s.player) !== uuid);
+    const newSearches = [{player, timestamp}, ...existing].slice(0, 10);
+    setRecentSearches(newSearches);
+
+    // Save to localStorage
+    localStorage.setItem('recentPlayerSearches', JSON.stringify(newSearches));
+
+    // Open player window and close lookup
+    const url = new URL(window.location.href);
+    url.searchParams.set("player", uuid);
+    window.history.pushState({}, "", url.toString());
+    openPlayerWindow(uuid, player.username);
+    closeLookup();
+  };
+
+  const closeTimeoutRef = useRef<number | null>(null);
+
+  // Function to open player window when clicked from search
+  const openPlayerWindow = (playerId: string, username?: string) => {
+    openPlayerWindowFromContext(playerId, username);
+    openDashboardLookupWindow(); // Also open at dashboard level for tracking
+  };
+
+  const openLookup = () => {
+    if (!isLookupOpen && !isLookupClosing) {
+      setIsLookupOpen(true);
+      setIsLookupClosing(false);
+    }
+  };
+
+  const closeLookup = () => {
+    // Don't attempt to close if not open
+    if (!isLookupOpen) return;
+
+    // If already hovering over search area, don't try to close
+    if (isHoveringSearch) return;
+
+    // Clear any existing timeout
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+
+    // Set a 300ms delay before closing - allows user to move mouse to search panel
+    closeTimeoutRef.current = window.setTimeout(() => {
+      // IMPORTANT: Check again if user is hovering over search during delay
+      if (isHoveringSearch) {
+        closeTimeoutRef.current = null;
+        return;
+      }
+
+      // Start the close animation
+      setIsLookupClosing(true);
+
+      // Actually close the panel after animation completes
+      setTimeout(() => {
+        if (!isHoveringSearch) {
+          // Final check before closing
+          setIsLookupOpen(false);
+          setIsLookupClosing(false);
+          setSearchQuery("");
+          setIsFocused(false);
+        } else {
+          // If user somehow got back to the panel, cancel closing
+          setIsLookupClosing(false);
+        }
+      }, 100);
+
+      closeTimeoutRef.current = null;
+    }, 300);
+  };
+
+  // Update search active state when search query changes
+  useEffect(() => {
+    setIsSearchActive(searchQuery.length > 0);
+  }, [searchQuery, setIsSearchActive]);
+
+  // Check URL parameters on initial load to open player window if needed
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const playerIdFromUrl = url.searchParams.get("player");
+
+    if (playerIdFromUrl) {
+      openPlayerWindowFromContext(playerIdFromUrl);
+      openDashboardLookupWindow();
+    }
+  }, [openDashboardLookupWindow, openPlayerWindowFromContext]);
+
+  // Clean up any timeouts when component unmounts
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // IMPORTANT: prefetch must decode + map identically to the real data hooks
+  // (useRecentTickets/useRecentPunishments/useTickets/usePunishmentTypes), since
+  // react-query keys purely by queryKey. Storing the raw proto-JSON wrapper here
+  // would let a hover-then-navigate serve a wrong-shaped cached value and crash
+  // the consuming page.
+  const prefetchRouteData = (path: string) => {
+    switch (path) {
+      case '/panel':
+        queryClient.prefetchQuery({
+          queryKey: ['/v1/panel/dashboard/recent-tickets', 3],
+          queryFn: async () => {
+            const res = await protoFetch(
+              DashboardRecentTicketsResponseSchema,
+              '/v1/panel/dashboard/recent-tickets?limit=3',
+            );
+            return res.tickets.map((ticket) => ({
+              id: ticket.id,
+              title: ticket.title,
+              initialMessage: ticket.initialMessage,
+              status: ticket.status,
+              priority: ticket.priority,
+              createdAt: new Date(toNum(ticket.createdAt)),
+              playerName: ticket.playerName,
+              type: ticket.type,
+            }));
+          },
+          staleTime: 2 * 60 * 1000,
+        });
+        queryClient.prefetchQuery({
+          queryKey: ['/v1/panel/dashboard/recent-punishments', 5],
+          queryFn: async () => {
+            const res = await protoFetch(
+              DashboardRecentPunishmentsResponseSchema,
+              '/v1/panel/dashboard/recent-punishments?limit=5',
+            );
+            return res.punishments.map((punishment) => ({
+              id: punishment.id,
+              playerName: punishment.playerName,
+              playerUuid: punishment.playerUuid,
+              type: punishment.type,
+              reason: punishment.reason,
+              issuerName: punishment.issuerName,
+              issued: new Date(toNum(punishment.issued)),
+              active: punishment.active,
+            }));
+          },
+          staleTime: 2 * 60 * 1000,
+        });
+        break;
+      case '/panel/tickets':
+        queryClient.prefetchQuery({
+          queryKey: ['/v1/panel/tickets', { page: 1, limit: 10, search: '', status: '', types: [], author: '', labels: [], assignees: [], sort: 'newest' }],
+          queryFn: async () => {
+            const response = await protoFetch(
+              PaginatedTicketsResponseSchema,
+              '/v1/panel/tickets?page=1&limit=10&sort=newest',
+            );
+            return {
+              tickets: response.tickets.map((item) => ({
+                ...item,
+                date: Number(item.date),
+                lastReply: item.lastReply
+                  ? { ...item.lastReply, created: Number(item.lastReply.created) }
+                  : undefined,
+              })),
+              pagination: response.pagination
+                ? { ...response.pagination, totalTickets: Number(response.pagination.totalTickets) }
+                : undefined,
+              filters: response.filters,
+            };
+          },
+          staleTime: 30000,
+        });
+        break;
+      case '/panel/settings':
+        queryClient.prefetchQuery({
+          queryKey: ['/v1/panel/settings/punishment-types'],
+          queryFn: async () => {
+            const response = await protoFetch(
+              PanelPunishmentTypesResponseSchema,
+              '/v1/panel/settings/punishment-types',
+            );
+            return response.punishmentTypes;
+          },
+          staleTime: 5 * 60 * 1000,
+        });
+        break;
+    }
+  };
+
+  const allNavItems = useMemo(() => [
+    {
+      name: t('nav.home'),
+      path: "/panel",
+      icon: HOME_ICON,
+      onClick: () => {
+        if (isLookupOpen) closeLookup();
+        navigate("/panel");
+      },
+    },
+    {
+      name: t('nav.lookup'),
+      path: "/panel/lookup",
+      icon: SEARCH_ICON,
+      onClick: () => {
+        if (isLookupOpen) {
+          closeLookup();
+        } else {
+          openLookup();
+        }
+      },
+    },
+    {
+      name: t('nav.tickets'),
+      path: "/panel/tickets",
+      icon: TICKET_ICON,
+      onClick: () => {
+        if (isLookupOpen) closeLookup();
+        navigate("/panel/tickets");
+      },
+    },
+    {
+      name: t('nav.audit'),
+      path: "/panel/audit",
+      icon: AUDIT_ICON,
+      permission: PERMISSIONS.ADMIN_AUDIT_VIEW,
+      onClick: () => {
+        if (isLookupOpen) closeLookup();
+        navigate("/panel/audit");
+      },
+    },
+    {
+      name: t('nav.settings'),
+      path: "/panel/settings",
+      icon: SETTINGS_ICON,
+      onClick: () => {
+        if (isLookupOpen) closeLookup();
+        navigate("/panel/settings");
+      },
+    },
+  ], [t, isLookupOpen, navigate]);
+
+  // Filter nav items based on permissions
+  // Don't show permission-based items while permissions are loading to prevent flash
+  const navItems = allNavItems.filter(item => {
+    if (!item.permission) return true; // Always show items without permission requirements
+    if (isPermissionsLoading) return false; // Hide permission-based items while loading
+    return hasPermission(item.permission);
+  });
+
+  // Calculate sidebar height dynamically (navItems * 56px + top/bottom padding of 32px)
+  const sidebarHeight = Math.max(200, navItems.length * 56 + 16);
+
+  const isPlayerOnline = (player: Player) => {
+    if (player.status === 'Online') return true;
+    if (player.isOnline !== undefined) return player.isOnline;
+    if (player.data?.isOnline !== undefined) return player.data.isOnline;
+    return player.online === true;
+  };
+
+  // Fetch players from API using search query (only when user types, and not for punishment lookups)
+  const { data: players, isLoading } = usePlayerSearch(
+    isPunishmentLookup ? '' : searchQuery
+  );
+
+  const filteredLookups = players || [];
+
+  return (
+    <div className="fixed ml-4 top-1/4 left-4 z-40">
+      {/* Server Logo */}
+      <div className="bg-sidebar/90 p-2 rounded-2xl shadow-card-elevated border border-sidebar-border/50 w-16 mb-3 transition-all duration-200 hover:shadow-card-elevated hover:bg-sidebar/95"
+        style={{ backdropFilter: "blur(12px)" }}>
+        <img 
+          src={publicSettings?.panelIconUrl || serverLogo} 
+          alt={publicSettings?.serverDisplayName || "Server Logo"} 
+          className="w-12 h-12 object-contain rounded-xl"
+        />
+      </div>
+      
+      <div className="flex">
+        {/* Fixed-width sidebar navigation (always visible) */}
+        <aside
+          className="bg-sidebar/90 h-auto rounded-2xl w-16 overflow-hidden shadow-card-elevated border border-sidebar-border/50"
+          style={{
+            backdropFilter: "blur(12px)",
+            height: `${sidebarHeight}px`
+          }}
+          onClick={(e) => {
+            // Close search if clicked anywhere except the lookup button
+            if (
+              isLookupOpen &&
+              !(e.target as HTMLElement).closest('button[data-lookup="true"]')
+            ) {
+              closeLookup();
+            }
+          }}
+        >
+          <div className="w-16 p-2 pt-4 pb-4">
+            <nav className="flex-1">
+              <ul className="space-y-4">
+                {navItems.map((item) => {
+                  const isActive =
+                    location === item.path ||
+                    (item.path === "/panel/lookup" && isLookupOpen) ||
+                    (item.path === "/panel" && location.startsWith("/panel/player/"));
+                  // Special handling for lookup icon
+                  if (item.path === "/panel/lookup") {
+                    return (
+                      <li key={item.path} className="relative">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant={isActive ? "secondary" : "ghost"}
+                              size="icon"
+                              aria-label={item.name}
+                              className={cn(
+                                "w-full h-10",
+                                isActive &&
+                                  "bg-sidebar-primary/10 text-sidebar-primary hover:bg-sidebar-primary/20",
+                              )}
+                              onClick={() =>
+                                isLookupOpen ? closeLookup() : openLookup()
+                              }
+                              onMouseEnter={() => {
+                                // Clear any pending close operation when mouse enters icon
+                                if (closeTimeoutRef.current) {
+                                  clearTimeout(closeTimeoutRef.current);
+                                  closeTimeoutRef.current = null;
+                                }
+                                openLookup();
+                              }}
+                              onMouseOver={() => {
+                                // Also handle onMouseOver to ensure consistent behavior
+                                if (closeTimeoutRef.current) {
+                                  clearTimeout(closeTimeoutRef.current);
+                                  closeTimeoutRef.current = null;
+                                }
+                                openLookup();
+                              }}
+                              onMouseLeave={closeLookup}
+                              data-lookup="true"
+                            >
+                              <div className="relative">
+                                <Search className="h-5 w-5" />
+                              </div>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="right">{t('nav.lookup')}</TooltipContent>
+                        </Tooltip>
+                      </li>
+                    );
+                  }
+
+                  // Regular menu items
+                  return (
+                    <li key={item.path}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant={isActive ? "secondary" : "ghost"}
+                            size="icon"
+                            aria-label={item.name}
+                            className={cn(
+                              "w-full h-10",
+                              isActive &&
+                                "bg-sidebar-primary/10 text-sidebar-primary hover:bg-sidebar-primary/20",
+                            )}
+                            onClick={item.onClick}
+                            onMouseEnter={() => prefetchRouteData(item.path)}
+                          >
+                            <div className="relative">
+                              {item.icon}
+                            </div>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="right">
+                          {item.name}
+                        </TooltipContent>
+                      </Tooltip>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          </div>
+        </aside>
+
+        {/* Expandable search area */}
+        {isLookupOpen && (
+          <div
+            className={`bg-sidebar/90 ml-2 rounded-2xl overflow-hidden shadow-card-elevated border border-sidebar-border/50 ${isLookupClosing ? "animate-slide-left" : "animate-slide-right"}`}
+            style={{
+              backdropFilter: "blur(12px)",
+              height: `${sidebarHeight}px`
+            }}
+            onMouseEnter={() => {
+              // Immediately cancel any pending close operations
+              if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+              }
+              setIsLookupClosing(false);
+              setIsHoveringSearch(true);
+            }}
+            onMouseLeave={() => {
+              // First, update the hovering state
+              setIsHoveringSearch(false);
+
+              // Force start the closing animation directly without delay
+              // This is needed when moving away from the search panel
+              setIsLookupClosing(true);
+
+              // And close the panel after animation completes
+              setTimeout(() => {
+                setIsLookupOpen(false);
+                setIsLookupClosing(false);
+                setSearchQuery("");
+                setIsFocused(false);
+              }, 100);
+            }}
+          >
+            <div className="p-3 pt-4 w-[240px] h-full flex flex-col">
+              <Input
+                placeholder={t('search.searchPlayers')}
+                className="w-full h-9 bg-background/90 border border-sidebar-border rounded-md text-sm px-3 mb-2"
+                value={searchQuery}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+                autoFocus
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+              />
+              <div className="text-xs text-muted-foreground mb-3 px-1">
+                {t('search.searchPunishmentIds')}
+              </div>
+
+              {(isLoading || isPunishmentLoading) ? (
+                <div className="py-8 flex justify-center items-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : searchQuery ? (
+                <div className="flex-1 overflow-y-auto pr-1">
+                  {/* Show punishment lookup result first if using # prefix */}
+                  {isPunishmentLookup && punishmentLookupResult && (() => {
+                    return (
+                    <div className="mb-3">
+                      <div className="py-1 px-2 mb-2 text-xs text-muted-foreground">
+                        {t('search.punishmentFound')}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-start text-xs py-3 px-3 h-auto mb-1 bg-primary/10 hover:bg-primary/20 border border-primary/20"
+                        onClick={() => {
+                          // Set URL parameter for player with punishment ID
+                          const url = new URL(window.location.href);
+                          url.searchParams.set("player", punishmentLookupResult.playerUuid);
+                          url.searchParams.set("punishment", punishmentLookupResult.punishment.id);
+                          window.history.pushState({}, "", url.toString());
+
+                          // Open the player window
+                          openPlayerWindow(punishmentLookupResult.playerUuid);
+                          closeLookup();
+                        }}
+                      >
+                        <div className="flex flex-col items-start w-full">
+                          <span className="font-medium text-primary">
+                            {punishmentLookupResult.playerUsername || punishmentLookupResult.playerUuid || 'Unknown Player'}
+                          </span>
+                          <span className="text-primary text-[10px] font-medium">
+                            ID: {punishmentLookupResult.punishment.id}
+                          </span>
+                        </div>
+                      </Button>
+                    </div>
+                    );
+                  })()}
+                  
+                  {/* Show punishment not found message */}
+                  {isPunishmentLookup && punishmentError && (
+                    <div className="mb-3">
+                      <div className="py-1 px-2 mb-2 text-xs text-muted-foreground">
+                        {t('search.punishmentLookup')}
+                      </div>
+                      <div className="py-3 px-3 text-center text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded">
+                        {t('search.punishmentNotFound', { id: punishmentQuery })}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Show player search results */}
+                  {!isPunishmentLookup && filteredLookups.length > 0 && (
+                    <div>
+                      <div className="py-1 px-2 mb-2 text-xs text-muted-foreground">
+                        {t('search.playersFound')}
+                      </div>
+                      {filteredLookups.map((player: Player) => (
+                        <Button
+                          key={getPlayerUuid(player) || player.username || ''}
+                          variant="ghost"
+                          className="w-full justify-start text-xs py-2 px-3 h-auto mb-1"
+                          onClick={() => handlePlayerSelect(player)}
+                        >
+                          <div className="flex flex-col items-start">
+                            <span className="font-medium">{player.username || t('search.unknown')}</span>
+                            <span className="text-muted-foreground text-[10px]">
+                              {isPlayerOnline(player) ? t('search.online') : t('search.offline')}
+                            </span>
+                          </div>
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Show punishment ID prompt when # is typed but no ID yet */}
+                  {isPunishmentLookup && punishmentQuery.length === 0 && (
+                    <div className="py-3 px-3 text-center text-xs text-muted-foreground bg-muted/10 border border-muted/20 rounded">
+                      {t('search.enterPunishmentId')}
+                    </div>
+                  )}
+
+                  {/* Show no results message */}
+                  {!isPunishmentLookup && filteredLookups.length === 0 && !punishmentLookupResult && (
+                    <div className="py-3 text-center text-xs text-muted-foreground">
+                      {t('search.noPlayersFound', { query: searchQuery })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto pr-1">
+                  {recentSearches.length > 0 ? (
+                    <>
+                      <div className="py-1 px-2 mb-2 text-xs text-muted-foreground">
+                        {t('search.recentSearches')}
+                      </div>
+                      {recentSearches
+                        .sort((a, b) => b.timestamp - a.timestamp)
+                        .slice(0, 5)
+                        .map(({player}) => (
+                        <Button
+                          key={getPlayerUuid(player) || player.username || ''}
+                          variant="ghost"
+                          className="w-full justify-start text-xs py-2 px-3 h-auto mb-1"
+                          onClick={() => handlePlayerSelect(player)}
+                        >
+                          <div className="flex flex-col items-start">
+                            <span className="font-medium">{player.username || t('search.unknown')}</span>
+                            <span className="text-muted-foreground text-[10px]">
+                              {isPlayerOnline(player) ? t('search.online') : t('search.offline')}
+                            </span>
+                          </div>
+                        </Button>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="py-6 text-center text-xs text-muted-foreground">
+                      <p>{t('search.startTyping')}</p>
+                      <p className="mt-2">{t('search.searchPunishmentIds')}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+};
+
+export default Sidebar;

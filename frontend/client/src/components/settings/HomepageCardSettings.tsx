@@ -1,0 +1,670 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Button } from '@modl-gg/shared-web/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@modl-gg/shared-web/components/ui/card';
+import { Input } from '@modl-gg/shared-web/components/ui/input';
+import { Textarea } from '@modl-gg/shared-web/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@modl-gg/shared-web/components/ui/select';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@modl-gg/shared-web/components/ui/alert-dialog';
+import { useToast } from '@modl-gg/shared-web/hooks/use-toast';
+import { queryClient } from '@/lib/queryClient';
+import { apiFetch } from '@/lib/api';
+import { safeExternalHref } from '@/lib/utils';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import {
+  Plus, Edit, Trash2, GripVertical, Eye, EyeOff,
+  Shield, UserPlus, MessageCircle, Mail, Phone, Scale,
+  Users, User, UserCheck, UserX, Crown, Award,
+  BookOpen, Book, FileText, ScrollText, Newspaper,
+  Library, GraduationCap, HelpCircle, Info, AlertCircle,
+  ExternalLink, Link as LinkIcon, ArrowRight, ChevronRight, Home,
+  Search, Download, Upload, Share,
+  MessageSquare, Send, Inbox, Bell, Megaphone,
+  Radio, Headphones, Mic, Video, Calendar,
+  Gamepad2, Zap, Server, Globe, Wifi, Signal,
+  Activity, BarChart, TrendingUp, Target, Trophy,
+  Settings, Wrench, Cog, Sliders, Filter,
+  Lock, Unlock, Key, ShieldCheck, ShieldAlert,
+  Minus, Check, X, AlertTriangle, CheckCircle,
+  XCircle, Clock, Timer, Pause, Play,
+  CreditCard, DollarSign, Gift, Star, Heart, ThumbsUp,
+  Flag, Map, Compass, Navigation, Bookmark, Tag,
+} from 'lucide-react';
+import { Switch } from '@modl-gg/shared-web/components/ui/switch';
+import { Label } from '@modl-gg/shared-web/components/ui/label';
+import { DndProvider, useDrag, useDrop, type DropTargetMonitor } from 'react-dnd';
+import type { Identifier } from 'dnd-core';
+import { HTML5Backend } from 'react-dnd-html5-backend';
+
+// Allowlist of icons selectable for homepage cards; keep in sync with HomePage.tsx ICONS map.
+const ICONS: Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
+  Shield, UserPlus, MessageCircle, Mail, Phone, Scale,
+  Users, User, UserCheck, UserX, Crown, Award,
+  BookOpen, Book, FileText, ScrollText, Newspaper,
+  Library, GraduationCap, HelpCircle, Info, AlertCircle,
+  ExternalLink, Link: LinkIcon, ArrowRight, ChevronRight, Home,
+  Search, Eye, Download, Upload, Share,
+  MessageSquare, Send, Inbox, Bell, Megaphone,
+  Radio, Headphones, Mic, Video, Calendar,
+  Gamepad2, Zap, Server, Globe, Wifi, Signal,
+  Activity, BarChart, TrendingUp, Target, Trophy,
+  Settings, Wrench, Cog, Sliders, Filter,
+  Lock, Unlock, Key, ShieldCheck, ShieldAlert,
+  Plus, Minus, Check, X, AlertTriangle, CheckCircle,
+  XCircle, Clock, Timer, Pause, Play,
+  CreditCard, DollarSign, Gift, Star, Heart, ThumbsUp,
+  Flag, Map, Compass, Navigation, Bookmark, Tag,
+};
+
+const getAvailableIcons = () => Object.keys(ICONS).sort();
+
+interface HomepageCard {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  iconColor?: string;
+  actionType: 'url' | 'category_dropdown';
+  actionUrl?: string;
+  actionButtonText?: string;
+  categoryId?: string;
+  backgroundColor?: string;
+  isEnabled: boolean;
+  ordinal: number;
+  category?: {
+    id: string;
+    name: string;
+    slug: string;
+    description?: string;
+  };
+}
+
+interface KnowledgebaseCategory {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  ordinal: number;
+}
+
+const fetchHomepageCards = async (): Promise<HomepageCard[]> => {
+  const { getApiUrl } = await import('@/lib/api');
+  const response = await fetch(getApiUrl('/v1/panel/homepage-cards'), {
+    credentials: 'include',
+    headers: {  }
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch homepage cards');
+  }
+  const data = await response.json();
+  return Array.isArray(data.cards) ? data.cards : [];
+};
+
+const fetchCategories = async (): Promise<KnowledgebaseCategory[]> => {
+  const { getApiUrl } = await import('@/lib/api');
+  const response = await fetch(getApiUrl('/v1/panel/knowledgebase/categories'), {
+    credentials: 'include',
+    headers: {  }
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch categories');
+  }
+  const data = await response.json();
+  return Array.isArray(data.categories) ? data.categories : [];
+};
+
+const ITEM_TYPE_HOMEPAGE_CARD = 'homepage-card';
+
+interface CardDragItem {
+  id: string;
+  originalIndex: number;
+}
+
+interface DraggableCardItemProps {
+  card: HomepageCard;
+  index: number;
+  moveCard: (dragIndex: number, hoverIndex: number) => void;
+  onDrop: () => void;
+  onEdit: (card: HomepageCard) => void;
+  onDelete: (cardId: string) => void;
+  deleteDisabled: boolean;
+  IconPreview: React.FC<{ iconName: string; color?: string }>;
+}
+
+const DraggableCardItem: React.FC<DraggableCardItemProps> = ({
+  card, index, moveCard, onDrop, onEdit, onDelete, deleteDisabled, IconPreview,
+}) => {
+  const { t } = useTranslation();
+  const ref = useRef<HTMLDivElement>(null);
+
+  const [{ handlerId }, drop] = useDrop<CardDragItem, void, { handlerId: Identifier | null }>({
+    accept: ITEM_TYPE_HOMEPAGE_CARD,
+    collect(monitor) {
+      return { handlerId: monitor.getHandlerId() };
+    },
+    hover(item: CardDragItem, monitor: DropTargetMonitor) {
+      if (!ref.current) return;
+      const dragIndex = item.originalIndex;
+      const hoverIndex = index;
+      if (dragIndex === hoverIndex) return;
+
+      const hoverBoundingRect = ref.current.getBoundingClientRect();
+      const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
+      const clientOffset = monitor.getClientOffset();
+      const hoverClientY = clientOffset!.y - hoverBoundingRect.top;
+
+      if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
+      if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
+
+      moveCard(dragIndex, hoverIndex);
+      item.originalIndex = hoverIndex;
+    },
+  });
+
+  const [{ isDragging }, drag, preview] = useDrag({
+    type: ITEM_TYPE_HOMEPAGE_CARD,
+    item: () => ({ id: card.id, originalIndex: index }),
+    collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    end: (_item, monitor) => {
+      if (monitor.didDrop()) onDrop();
+    },
+  });
+
+  drop(drag(ref));
+
+  return (
+    <div ref={preview} style={{ opacity: isDragging ? 0.5 : 1 }} data-handler-id={handlerId}>
+      <Card ref={ref} className="p-4 rounded-card shadow-card-inner bg-surface-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab" />
+            <IconPreview iconName={card.icon} color={card.iconColor} />
+            <div>
+              <h4 className="font-medium">{card.title}</h4>
+              <p className="text-sm text-muted-foreground">{card.description}</p>
+              <p className="text-xs text-muted-foreground">
+                {card.actionType === 'url' ? `URL: ${card.actionUrl}` : `${t('settings.homepage.category')}: ${card.category?.name}`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {card.isEnabled ? (
+              <Eye className="h-4 w-4 text-green-600" />
+            ) : (
+              <EyeOff className="h-4 w-4 text-muted-foreground" />
+            )}
+            <Button variant="ghost" size="sm" onClick={() => onEdit(card)}>
+              <Edit className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => onDelete(card.id)} disabled={deleteDisabled}>
+              <Trash2 className="h-4 w-4 text-destructive" />
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const HomepageCardSettings: React.FC = () => {
+  const { toast } = useToast();
+  const { t } = useTranslation();
+  const [editingCard, setEditingCard] = useState<HomepageCard | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    icon: 'BookOpen',
+    iconColor: '#3b82f6', // Default blue color
+    actionType: 'url' as 'url' | 'category_dropdown',
+    actionUrl: '',
+    actionButtonText: '',
+    categoryId: '',
+    backgroundColor: '',
+    isEnabled: true
+  });
+
+  const availableIcons = getAvailableIcons();
+
+  const { data: homepageCards, isLoading: isLoadingCards } = useQuery<HomepageCard[]>({
+    queryKey: ['homepageCards'],
+    queryFn: fetchHomepageCards,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: categories } = useQuery<KnowledgebaseCategory[]>({
+    queryKey: ['knowledgebaseCategories'],
+    queryFn: fetchCategories,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const createCardMutation = useMutation<HomepageCard, Error, Partial<HomepageCard>>({
+    mutationFn: async (newCard) => {
+      const response = await apiFetch('/v1/panel/homepage-cards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCard),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to create card' }));
+        throw new Error(errorData.message);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.homepage.cardCreated') });
+      queryClient.invalidateQueries({ queryKey: ['homepageCards'] });
+      resetForm();
+      setIsCreating(false);
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const updateCardMutation = useMutation<HomepageCard, Error, { id: string } & Partial<HomepageCard>>({
+    mutationFn: async (updatedCard) => {
+      const { id, ...updateData } = updatedCard;
+      const response = await apiFetch(`/v1/panel/homepage-cards/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to update card' }));
+        throw new Error(errorData.message);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.homepage.cardUpdated') });
+      queryClient.invalidateQueries({ queryKey: ['homepageCards'] });
+      setEditingCard(null);
+      setIsCreating(false);
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const deleteCardMutation = useMutation<void, Error, string>({
+    mutationFn: async (cardId) => {
+      const response = await apiFetch(`/v1/panel/homepage-cards/${cardId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to delete card' }));
+        throw new Error(errorData.message);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.homepage.cardDeleted') });
+      queryClient.invalidateQueries({ queryKey: ['homepageCards'] });
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const reorderCardsMutation = useMutation<void, Error, { orderedCardIds: string[] }>({
+    mutationFn: async (data) => {
+      const response = await apiFetch('/v1/panel/homepage-cards/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: data.orderedCardIds }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to reorder cards' }));
+        throw new Error(errorData.message);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: t('toast.success'), description: t('settings.homepage.cardsReordered') });
+      queryClient.invalidateQueries({ queryKey: ['homepageCards'] });
+    },
+    onError: (error) => {
+      toast({ title: t('toast.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const [displayedCards, setDisplayedCards] = useState<HomepageCard[]>([]);
+
+  useEffect(() => {
+    if (homepageCards) {
+      setDisplayedCards([...homepageCards].sort((a, b) => a.ordinal - b.ordinal));
+    }
+  }, [homepageCards]);
+
+  const moveCard = useCallback((dragIndex: number, hoverIndex: number) => {
+    setDisplayedCards((prev) => {
+      const updated = [...prev];
+      const [dragged] = updated.splice(dragIndex, 1);
+      if (dragged) {
+        updated.splice(hoverIndex, 0, dragged);
+      }
+      return updated;
+    });
+  }, []);
+
+  const handleDropCard = useCallback(() => {
+    const orderedCardIds = displayedCards.map(c => c.id);
+    reorderCardsMutation.mutate({ orderedCardIds });
+  }, [displayedCards, reorderCardsMutation]);
+
+  const resetForm = () => {
+    setFormData({
+      title: '',
+      description: '',
+      icon: 'BookOpen',
+      iconColor: '#3b82f6',
+      actionType: 'url',
+      actionUrl: '',
+      actionButtonText: '',
+      categoryId: '',
+      backgroundColor: '',
+      isEnabled: true
+    });
+  };
+
+  const rejectInvalidActionUrl = (): boolean => {
+    if (formData.actionType === 'url' && !safeExternalHref(formData.actionUrl)) {
+      toast({ title: t('toast.error'), description: t('settings.homepage.urlInvalid'), variant: 'destructive' });
+      return true;
+    }
+    return false;
+  };
+
+  const handleCreateCard = () => {
+    if (!formData.title.trim() || !formData.description.trim()) {
+      toast({ title: t('toast.error'), description: t('settings.homepage.titleDescRequired'), variant: 'destructive' });
+      return;
+    }
+
+    if (formData.actionType === 'url' && !formData.actionUrl.trim()) {
+      toast({ title: t('toast.error'), description: t('settings.homepage.urlRequired'), variant: 'destructive' });
+      return;
+    }
+
+    if (rejectInvalidActionUrl()) return;
+
+    if (formData.actionType === 'category_dropdown' && !formData.categoryId) {
+      toast({ title: t('toast.error'), description: t('settings.homepage.categoryRequired'), variant: 'destructive' });
+      return;
+    }
+
+    createCardMutation.mutate(formData);
+  };
+
+  const handleUpdateCard = () => {
+    if (!editingCard) return;
+
+    if (!formData.title.trim() || !formData.description.trim()) {
+      toast({ title: t('toast.error'), description: t('settings.homepage.titleDescRequired'), variant: 'destructive' });
+      return;
+    }
+
+    if (rejectInvalidActionUrl()) return;
+
+    updateCardMutation.mutate({ id: editingCard.id, ...formData });
+  };
+
+  const handleEditCard = (card: HomepageCard) => {
+    setEditingCard(card);
+    setFormData({
+      title: card.title,
+      description: card.description,
+      icon: card.icon,
+      iconColor: card.iconColor || '#3b82f6',
+      actionType: card.actionType,
+      actionUrl: card.actionUrl || '',
+      actionButtonText: card.actionButtonText || '',
+      categoryId: card.categoryId || '',
+      backgroundColor: card.backgroundColor || '',
+      isEnabled: card.isEnabled
+    });
+    setIsCreating(true);
+  };
+
+  const handleDeleteCard = (cardId: string) => {
+    setCardToDelete(cardId);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDeleteCard = () => {
+    if (cardToDelete) {
+      deleteCardMutation.mutate(cardToDelete);
+    }
+    setDeleteDialogOpen(false);
+    setCardToDelete(null);
+  };
+
+  const IconPreview = ({ iconName, color }: { iconName: string; color?: string }) => {
+    const IconComponent = ICONS[iconName] || BookOpen;
+    return <IconComponent className="h-5 w-5" style={{ color: color || 'currentColor' }} />;
+  };
+
+  return (
+    <DndProvider backend={HTML5Backend}>
+    <div className="space-y-6">
+      <Card className="rounded-card shadow-card">
+        <CardHeader>
+          <CardTitle>{t('settings.homepage.title')}</CardTitle>
+          <CardDescription>
+            {t('settings.homepage.description')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {!isCreating ? (
+            <Button onClick={() => setIsCreating(true)} className="w-full">
+              <Plus className="mr-2 h-4 w-4" /> {t('settings.homepage.addNewCard')}
+            </Button>
+          ) : (
+            <Card className="p-4 border-2 border-dashed rounded-card shadow-card-inner bg-surface-2">
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="title">{t('settings.homepage.cardTitle')}</Label>
+                    <Input
+                      id="title"
+                      placeholder={t('settings.homepage.cardTitlePlaceholder')}
+                      value={formData.title}
+                      onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="icon">{t('settings.homepage.icon')}</Label>
+                    <Select value={formData.icon} onValueChange={(value) => setFormData({ ...formData, icon: value })}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-48">
+                        {availableIcons.map(iconName => (
+                          <SelectItem key={iconName} value={iconName}>
+                            <div className="flex items-center gap-2">
+                              <IconPreview iconName={iconName} color={formData.iconColor} />
+                              {iconName}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="iconColor">{t('settings.homepage.iconColor')}</Label>
+                  <div className="flex items-center gap-3">
+                    <Input
+                      id="iconColor"
+                      type="color"
+                      value={formData.iconColor}
+                      onChange={(e) => setFormData({ ...formData, iconColor: e.target.value })}
+                      className="w-16 h-10 p-1 rounded cursor-pointer"
+                    />
+                    <Input
+                      type="text"
+                      placeholder="#3b82f6"
+                      value={formData.iconColor}
+                      onChange={(e) => setFormData({ ...formData, iconColor: e.target.value })}
+                      className="flex-1"
+                    />
+                    <div className="flex items-center gap-2 px-3 py-2 border rounded-md bg-muted/30">
+                      <IconPreview iconName={formData.icon} color={formData.iconColor} />
+                      <span className="text-sm text-muted-foreground">{t('common.preview')}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="description">{t('settings.homepage.cardDescription')}</Label>
+                  <Textarea
+                    id="description"
+                    placeholder={t('settings.homepage.cardDescriptionPlaceholder')}
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="actionType">{t('settings.homepage.actionType')}</Label>
+                  <Select 
+                    value={formData.actionType} 
+                    onValueChange={(value: 'url' | 'category_dropdown') => setFormData({ ...formData, actionType: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="url">{t('settings.homepage.urlAction')}</SelectItem>
+                      <SelectItem value="category_dropdown">{t('settings.homepage.categoryDropdown')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {formData.actionType === 'url' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="actionUrl">{t('settings.homepage.url')}</Label>
+                      <Input
+                        id="actionUrl"
+                        placeholder="https://example.com or /internal-page"
+                        value={formData.actionUrl}
+                        onChange={(e) => setFormData({ ...formData, actionUrl: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="actionButtonText">{t('settings.homepage.buttonText')}</Label>
+                      <Input
+                        id="actionButtonText"
+                        placeholder={t('settings.homepage.buttonTextPlaceholder')}
+                        value={formData.actionButtonText}
+                        onChange={(e) => setFormData({ ...formData, actionButtonText: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <Label htmlFor="categoryId">{t('settings.homepage.category')}</Label>
+                    <Select
+                      value={formData.categoryId}
+                      onValueChange={(value) => setFormData({ ...formData, categoryId: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('settings.homepage.selectCategory')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categories?.map(category => (
+                          <SelectItem key={category.id} value={category.id}>
+                            {category.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="isEnabled"
+                    checked={formData.isEnabled}
+                    onCheckedChange={(checked) => setFormData({ ...formData, isEnabled: checked })}
+                  />
+                  <Label htmlFor="isEnabled">{t('common.enabled')}</Label>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={editingCard ? handleUpdateCard : handleCreateCard}
+                    disabled={createCardMutation.isPending || updateCardMutation.isPending}
+                  >
+                    {editingCard ? t('settings.homepage.updateCard') : t('settings.homepage.createCard')}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setIsCreating(false);
+                      setEditingCard(null);
+                      resetForm();
+                    }}
+                  >
+                    {t('common.cancel')}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* List existing cards */}
+          <div className="space-y-3">
+            {isLoadingCards ? (
+              <div className="text-center py-4">{t('settings.homepage.loadingCards')}</div>
+            ) : displayedCards.length ? (
+              displayedCards.map((card, index) => (
+                <DraggableCardItem
+                  key={card.id}
+                  card={card}
+                  index={index}
+                  moveCard={moveCard}
+                  onDrop={handleDropCard}
+                  onEdit={handleEditCard}
+                  onDelete={handleDeleteCard}
+                  deleteDisabled={deleteCardMutation.isPending}
+                  IconPreview={IconPreview}
+                />
+              ))
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                {t('settings.homepage.noCards')}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('settings.homepage.deleteCardTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.homepage.deleteCardConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteCard} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {t('common.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+    </DndProvider>
+  );
+};
+
+export default HomepageCardSettings;
