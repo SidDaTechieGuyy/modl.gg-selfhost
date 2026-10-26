@@ -235,3 +235,6 @@ gradle-app.setting
 .env.test
 
 # End of https://www.toptal.com/developers/gitignore/api/java,windows,macos,visualstudiocode,intellij+all,gradle
+!.dockerignore
+!libs/
+!libs/*.jar
