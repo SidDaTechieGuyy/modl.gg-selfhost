@@ -12,6 +12,7 @@ All installation, operation, testing, validation and provenance notes are collec
 
 - [Prerequisites](#prerequisites)
 - [Install and configure](#install-and-configure)
+- [Deploy with Coolify](#deploy-with-coolify)
 - [First setup and staff](#first-setup-and-staff)
 - [Minecraft plugin connection](#minecraft-plugin-connection)
 - [HTTPS with Caddy](#https-with-caddy) or [nginx](#https-with-nginx)
@@ -33,7 +34,9 @@ require internet access to the image, dependency, and upstream modl registries.
 
 For public access, point a domain at your server and install Caddy or nginx on the
 host. Keep ports 80 and 443 available to that proxy. MongoDB and the backend do not
-publish host ports; the gateway listens only on `127.0.0.1:8080`.
+publish host ports. Plain `docker compose up` automatically loads the local
+`docker-compose.override.yml`, exposing the gateway only on `127.0.0.1:8080`.
+The base `docker-compose.yml` publishes no host ports for container-based proxies.
 
 ## Install and configure
 
@@ -82,6 +85,35 @@ docker compose logs --tail=100 backend
 
 All three services should become healthy. Locally, visit http://localhost:8080.
 For a public instance, configure HTTPS below before creating the owner account.
+
+## Deploy with Coolify
+
+For a Git-based Coolify application, use `/docker-compose.yml` as Docker Compose
+Location. Load/reload the Compose definition from the repository after pulling
+updates; changes belong in Git rather than the rendered Compose preview.
+Do not include the local `docker-compose.override.yml` in Coolify's file list.
+
+Assign your HTTPS domain to the **frontend** service and set its internal target
+port to **80**. Set `BASE_URL` to that public address, for example
+`https://moderation.example.org`, with no internal port. Then save and redeploy.
+MongoDB and backend do not need domains or published ports. The Coolify proxy must
+share a Docker network with frontend; use Coolify-managed routing/network settings.
+
+The base Compose file uses `expose: ["80"]` rather than a host-port mapping, so it
+does not compete for host port 8080 (which may already be in use by Coolify or
+another application). Changing the host mapping to 8181 is unnecessary for proxy
+routing. The public URL still uses standard HTTPS port 443.
+
+For a manually managed host reverse proxy or localhost testing, use plain
+`docker compose up -d` to include the local override. If you specify `-f` yourself,
+include both files when you want the localhost mapping:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+```
+
+See [Coolify's Compose guide](https://coolify.io/docs/applications/builds/docker-compose)
+for repository-managed configuration and per-service domain routing.
 
 ## First setup and staff
 
