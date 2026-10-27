@@ -109,13 +109,15 @@ public class PanelAuthController {
         boolean isSuperAdmin = permissionService.isSuperAdmin(server, email);
 
         String username = requestData.hasUsername() ? requestData.getUsername() : null;
+        if (username != null) username = passwordAuthService.validateAvailableUsername(server, email, username);
         String language = requestData.hasLanguage() ? requestData.getLanguage() : null;
         String dateFormat = requestData.hasDateFormat() ? requestData.getDateFormat() : null;
 
         Optional<Staff> result = staffProfileService.updateOrCreateProfileUsername(server, email, username, isSuperAdmin, language, dateFormat);
+        if (username != null) passwordAuthService.updateOwnerUsername(email, username);
         if (result.isEmpty()) {
             if (isSuperAdmin) {
-                String resolvedUsername = username != null ? username : SuperAdminStaffSynthesizer.SUPER_ADMIN_USERNAME;
+                String resolvedUsername = username != null ? username : passwordAuthService.ownerUsername();
                 String resolvedLanguage = language != null ? language : SupportedLanguages.DEFAULT;
                 String resolvedDateFormat = dateFormat != null ? dateFormat : Staff.DEFAULT_DATE_FORMAT;
                 return superAdminProfileResponse(email, resolvedUsername, resolvedLanguage, resolvedDateFormat);
@@ -126,7 +128,7 @@ public class PanelAuthController {
         String role = isSuperAdmin ? RoleAuthorization.SUPER_ADMIN_ROLE_NAME : permissionService.effectiveRoleName(server, staff);
         String minecraftUsername = minecraftUsernameOrPanel(staff);
         return ResponseEntity.ok(PanelAuthProtoMapper.toProfileResponse(
-            staff.getId(), staff.getEmail(), staff.getUsername(), role, minecraftUsername, staff.getLanguage(), staff.getDateFormat()));
+            staff.getId(), staff.getEmail(), isSuperAdmin ? passwordAuthService.ownerUsername() : staff.getUsername(), role, minecraftUsername, staff.getLanguage(), staff.getDateFormat()));
     }
 
     @GetMapping("/me")
@@ -146,11 +148,11 @@ public class PanelAuthController {
             String role = isSuperAdmin ? RoleAuthorization.SUPER_ADMIN_ROLE_NAME : permissionService.effectiveRoleName(server, staff);
             String minecraftUsername = minecraftUsernameOrPanel(staff);
             return ResponseEntity.ok(PanelAuthProtoMapper.toProfileResponse(
-                staff.getId(), staff.getEmail(), staff.getUsername(), role, minecraftUsername, staff.getLanguage(), staff.getDateFormat()));
+                staff.getId(), staff.getEmail(), isSuperAdmin ? passwordAuthService.ownerUsername() : staff.getUsername(), role, minecraftUsername, staff.getLanguage(), staff.getDateFormat()));
         }
 
         if (isSuperAdmin) {
-            return superAdminProfileResponse(email, SuperAdminStaffSynthesizer.SUPER_ADMIN_USERNAME, SupportedLanguages.DEFAULT, Staff.DEFAULT_DATE_FORMAT);
+            return superAdminProfileResponse(email, passwordAuthService.ownerUsername(), SupportedLanguages.DEFAULT, Staff.DEFAULT_DATE_FORMAT);
         }
 
         return ResponseEntity.status(404).body(PanelAuthProtoMapper.toAuthResponse(false, "Staff member not found"));

@@ -128,7 +128,7 @@ const AssignMinecraftPlayerModal: React.FC<AssignMinecraftPlayerModalProps> = ({
         <DialogHeader>
           <DialogTitle>{t('settings.staff.assignMinecraftPlayer')}</DialogTitle>
           <DialogDescription>
-            {t('settings.staff.assignMinecraftPlayerDesc', { email: staffMember.email, role: staffMember.role })}
+            {t('settings.staff.assignMinecraftPlayerDesc', { email: staffMember.username || staffMember.email.split('@')[0], role: staffMember.role })}
           </DialogDescription>
         </DialogHeader>
 

@@ -113,7 +113,7 @@
     "language": "Idioma",
     "minecraftUsername": "Nome de Usuário no Minecraft",
     "displayNameDescription": "Seu nome exibido nas conversas de tickets e interações.",
-    "emailDescription": "Usado para login e para receber notificações de tickets.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "Para sua segurança, confirmar um novo e-mail desconectará suas outras sessões e removerá as chaves de acesso, portanto você precisará configurá-las novamente após entrar.",
     "emailUpdated": "E-mail Atualizado",
     "emailUpdatedDesc": "Seu e-mail foi atualizado com sucesso.",
@@ -379,7 +379,7 @@
       "staffManagement": "Gerenciamento da Equipe",
       "invite": "Convidar Equipe",
       "loadFailed": "Falha ao carregar a lista de equipe.",
-      "email": "E-mail",
+      "email": "Username",
       "role": "Cargo",
       "status": "Status",
       "minecraftPlayer": "Jogador de Minecraft",
@@ -403,7 +403,7 @@
       "cancelInvitationConfirm": "Tem certeza de que deseja cancelar o convite para {{email}}?",
       "removeStaffConfirm": "Tem certeza de que deseja remover {{email}} da sua equipe?",
       "inviteNewStaffMember": "Convidar Novo Membro da Equipe",
-      "inviteStaffDesc": "Envie um e-mail de convite para adicionar um novo membro à equipe.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Nota: endereços de e-mail de retransmissão privada do iCloud podem não receber convites.",
       "selectRole": "Selecione um cargo",
       "sending": "Enviando...",
@@ -1508,8 +1508,8 @@
     "appealNotAvailableDesc": "Este tipo de punição não pode ser apelada. Se você acha que isso é um erro, entre em contato com o suporte diretamente.",
     "submitAppeal": "Enviar apelação",
     "submitAppealDesc": "Forneça informações detalhadas sobre o motivo pelo qual você acredita que esta punição deve ser revisada. Seja honesto e detalhado em sua explicação.",
-    "emailPlaceholder": "Seu e-mail para notificações",
-    "emailDesc": "Nós o notificaremos quando sua apelação for processada",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Motivo da apelação",
     "appealReasonPlaceholder": "Explique por que você acredita que esta punição deve ser revisada...",
     "appealReasonDesc": "Seja honesto e forneça o máximo de detalhes possível",
@@ -1561,6 +1561,6 @@
     "submitATicket": "Enviar um ticket",
     "selectType": "Selecione o tipo de ticket",
     "emailAddress": "Endereço de e-mail",
-    "emailAddressDesc": "Seu endereço de e-mail para notificações de resposta"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

@@ -113,7 +113,7 @@
     "language": "Sprache",
     "minecraftUsername": "Minecraft-Benutzername",
     "displayNameDescription": "Dein Anzeigename in Ticket-Konversationen und Interaktionen.",
-    "emailDescription": "Wird für die Anmeldung und den Empfang von Ticket-Benachrichtigungen verwendet.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "Aus Sicherheitsgründen werden durch das Bestätigen einer neuen E-Mail-Adresse deine anderen Sitzungen abgemeldet und vorhandene Passkeys entfernt. Du musst sie nach dem erneuten Anmelden neu einrichten.",
     "emailUpdated": "E-Mail aktualisiert",
     "emailUpdatedDesc": "Deine E-Mail-Adresse wurde erfolgreich aktualisiert.",
@@ -379,7 +379,7 @@
       "staffManagement": "Personalverwaltung",
       "invite": "Personal einladen",
       "loadFailed": "Personalliste konnte nicht geladen werden.",
-      "email": "E-Mail",
+      "email": "Username",
       "role": "Rolle",
       "status": "Status",
       "minecraftPlayer": "Minecraft-Spieler",
@@ -403,7 +403,7 @@
       "cancelInvitationConfirm": "Bist du sicher, dass du die Einladung für {{email}} stornieren möchtest?",
       "removeStaffConfirm": "Bist du sicher, dass du {{email}} aus deinem Personal entfernen möchtest?",
       "inviteNewStaffMember": "Neues Personalmitglied einladen",
-      "inviteStaffDesc": "Sende eine Einladungs-E-Mail, um ein neues Personalmitglied hinzuzufügen.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Hinweis: iCloud-Private-Relay-E-Mail-Adressen erhalten möglicherweise keine Einladungen.",
       "selectRole": "Rolle auswählen",
       "sending": "Wird gesendet...",
@@ -1504,8 +1504,8 @@
     "appealNotAvailableDesc": "Dieser Straftyp ist nicht anfechtbar. Wenn du glaubst, dass dies ein Fehler ist, kontaktiere den Support direkt.",
     "submitAppeal": "Berufung einreichen",
     "submitAppealDesc": "Bitte gib detaillierte Informationen darüber an, warum du glaubst, dass diese Strafe überprüft werden sollte. Sei ehrlich und gründlich in deiner Erklärung.",
-    "emailPlaceholder": "Deine E-Mail für Benachrichtigungen",
-    "emailDesc": "Wir benachrichtigen dich, wenn deine Berufung bearbeitet wird",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Berufungsgrund",
     "appealReasonPlaceholder": "Erkläre, warum du glaubst, dass diese Strafe überprüft werden sollte...",
     "appealReasonDesc": "Sei ehrlich und gib so viele Details wie möglich an",
@@ -1561,6 +1561,6 @@
     "submitATicket": "Ticket einreichen",
     "selectType": "Ticket-Typ auswählen",
     "emailAddress": "E-Mail-Adresse",
-    "emailAddressDesc": "Deine E-Mail-Adresse für Antwortbenachrichtigungen"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

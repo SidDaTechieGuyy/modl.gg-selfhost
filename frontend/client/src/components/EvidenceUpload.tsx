@@ -60,7 +60,7 @@ export function EvidenceUpload({
       fileType: file?.type || 'application/octet-stream',
       fileSize: file?.size || 0,
       uploadedAt: new Date().toISOString(),
-      uploadedBy: user?.username || user?.email || 'Unknown',
+      uploadedBy: user?.username || 'Unknown',
       category
     };
 

@@ -50,7 +50,7 @@ public class InvitationService {
         }
 
         if (emailsToInvite.isEmpty()) {
-            throw new ValidationException("No emails provided");
+            throw new ValidationException("No usernames provided");
         }
 
         List<String> normalizedEmailsToInvite = emailsToInvite.stream()
@@ -60,7 +60,7 @@ public class InvitationService {
             .toList();
 
         if (normalizedEmailsToInvite.isEmpty()) {
-            throw new ValidationException("No valid emails provided");
+            throw new ValidationException("No valid usernames provided");
         }
         StaffRole grantedRole = roleAuthorization.assertGrantableRole(server, performer, request.role());
 
@@ -124,17 +124,17 @@ public class InvitationService {
         String normalizedEmail = EmailAddressUtil.normalize(email);
 
         if (server.getAdminEmail() != null && normalizedEmail.equalsIgnoreCase(server.getAdminEmail())) {
-            failed.add(new InviteResultResponse.FailedInvite(normalizedEmail, "Cannot send invitation to the admin email address."));
+            failed.add(new InviteResultResponse.FailedInvite(normalizedEmail, "Cannot invite the instance owner."));
             return;
         }
 
         if (staffRepository.existsByEmailExact(server, normalizedEmail)) {
-            failed.add(new InviteResultResponse.FailedInvite(normalizedEmail, "Email is already associated with an existing user."));
+            failed.add(new InviteResultResponse.FailedInvite(normalizedEmail, "Username is already associated with an existing account."));
             return;
         }
 
         if (invitationRepository.existsByEmailActive(server, normalizedEmail, new Date())) {
-            failed.add(new InviteResultResponse.FailedInvite(normalizedEmail, "An invitation for this email is already pending."));
+            failed.add(new InviteResultResponse.FailedInvite(normalizedEmail, "An invitation for this username is already pending."));
             return;
         }
 
@@ -200,7 +200,7 @@ public class InvitationService {
         }
 
         if (staffRepository.existsByEmailExact(server, invitation.getEmail())) {
-            throw new ConflictException("A staff member with this email already exists.");
+            throw new ConflictException("A staff member with this account already exists.");
         }
         StaffRole invitationRole = resolveInvitationRole(server, invitation.getRoleId());
 
@@ -212,6 +212,10 @@ public class InvitationService {
 
         String username = generateUsernameFromEmail(invitation.getEmail());
         String uniqueUsername = ensureUniqueUsername(server, username);
+        if (!invitation.getEmail().contains("@")) {
+            uniqueUsername = gg.modl.backend.auth.PasswordAuthService.normalizeUsername(invitation.getEmail());
+            if (staffRepository.existsByUsername(server, uniqueUsername)) throw new ConflictException("Username already in use.");
+        }
 
         Date now = new Date();
         Staff newStaff = Staff.builder()

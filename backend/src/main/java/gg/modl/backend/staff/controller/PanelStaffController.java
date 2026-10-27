@@ -77,7 +77,6 @@ public class PanelStaffController {
             .orElse(ResponseEntity.notFound().build());
     }
 
-    @PostMapping
     public ResponseEntity<gg.modl.proto.modl.v1.StaffResponse> createStaff(
         @RequestBody gg.modl.proto.modl.v1.CreateStaffRequest createRequest,
         HttpServletRequest request
@@ -147,7 +146,6 @@ public class PanelStaffController {
         return ResponseEntity.notFound().build();
     }
 
-    @PostMapping("/invite")
     public ResponseEntity<gg.modl.proto.modl.v1.InviteResultResponse> inviteStaff(
         @RequestBody gg.modl.proto.modl.v1.InviteStaffRequest inviteRequest,
         HttpServletRequest request

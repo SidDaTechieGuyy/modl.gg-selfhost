@@ -204,12 +204,12 @@ const SubmitTicketPage = () => {
 
     // Add email field to validation
     const isEmailRequired = formConfig.requireEmail === true;
-    const showEmailField = true;
+    const showEmailField = isEmailRequired;
     const emailField = {
       id: 'email',
       type: 'text' as const,
       label: 'Email Address',
-      description: 'Your email address for response notifications',
+      description: 'Contact email recorded with this ticket. Check the ticket page for updates.',
       required: isEmailRequired,
       order: 1,
       sectionId: undefined
@@ -341,7 +341,7 @@ const SubmitTicketPage = () => {
           type: apiTicketType,
           subject: finalSubject,
           creatorName: webCreatorName,
-          creatorEmail: email,
+          creatorEmail: email || undefined,
           formData: cleanFormData,
           fieldLabels: fieldLabelsMapping,
           attachments,
@@ -420,14 +420,14 @@ const SubmitTicketPage = () => {
     const sectionDefinitions = formConfig.sections || [];
 
     const isEmailRequiredForRender = formConfig.requireEmail === true;
-    const showEmailFieldForRender = true;
+    const showEmailFieldForRender = isEmailRequiredForRender;
 
     if (showEmailFieldForRender) {
       const emailField = {
         id: 'email',
         type: 'text' as const,
         label: 'Email Address',
-        description: isEmailRequiredForRender ? 'Your email address for response notifications' : 'Optionally provide your email to receive notifications',
+        description: 'Contact email recorded with this ticket. Check the ticket page for updates.',
         required: isEmailRequiredForRender,
         order: 2,
         sectionId: undefined,

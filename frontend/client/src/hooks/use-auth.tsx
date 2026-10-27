@@ -8,7 +8,7 @@ import { DEFAULT_DATE_FORMAT, setDateLocale, setDateFormat } from '@/utils/date-
 
 interface User {
   id: string;
-  email: string;
+  accountId: string;
   username: string;
   role: 'Super Admin' | 'Admin' | 'Moderator' | 'Helper';
   minecraftUsername?: string;
@@ -40,7 +40,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const response = await authFetch('/v1/panel/auth/me');
     if (response.status === 401 || response.status === 403) return null;
     if (!response.ok) throw new Error('Unable to check your session. Please try again.');
-    return await response.json() as User;
+    const { email: accountId, ...profile } = await response.json() as Omit<User, 'accountId'> & { email: string };
+    return { ...profile, accountId };
   }, []);
   const refreshUser = useCallback(async () => { setUser(await fetchUser()); }, [fetchUser]);
   useEffect(() => {

@@ -28,8 +28,7 @@ public class PublicRegistrationController {
 
     public record RegistrationRequest(
         @NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{3,32}") String username,
-        @NotBlank @Email @Size(max = 254) String email,
-        @NotBlank @Size(min = 12, max = 72) String password,
+        @NotBlank @Size(min = 8, max = 72) String password,
         @NotBlank @Size(min = 3, max = 100) String serverName) {}
 
     @GetMapping("/status")
@@ -40,7 +39,7 @@ public class PublicRegistrationController {
     @PostMapping
     public ResponseEntity<?> register(@Valid @RequestBody RegistrationRequest body,
                                      HttpServletRequest request, HttpServletResponse response) {
-        Server server = passwordAuthService.register(body.username(), body.email(), body.password(), body.serverName());
+        Server server = passwordAuthService.register(body.username(), body.username(), body.password(), body.serverName());
         AuthSessionData session = sessions.createSession(server, server.getAdminEmail(),
             RequestUtil.getClientIp(request), request.getHeader("User-Agent"));
         response.addCookie(cookies.createSessionCookie(session.getId()));

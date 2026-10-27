@@ -1,0 +1,20 @@
+/* Typography and theme from modl-gg/landing; scoped to first-boot registration. */
+@font-face { font-family: 'Landing Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-400.ttf') format('truetype'); }
+@font-face { font-family: 'Landing Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-500.ttf') format('truetype'); }
+@font-face { font-family: 'Landing Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-600.ttf') format('truetype'); }
+@font-face { font-family: 'Landing Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-700.ttf') format('truetype'); }
+@font-face { font-family: 'Landing Audiowide'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/audiowide-400.ttf') format('truetype'); }
+
+.registration-page {
+  font-family: 'Landing Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  --background: 240 10% 5.5%;
+  --foreground: 240 5% 88%;
+  --muted-foreground: 240 5% 64.9%;
+  --card: 240 10% 11%;
+  --border: 240 3.7% 18%;
+  --primary: 207 90% 54%;
+  --primary-foreground: 211 100% 99%;
+  --radius: 0.75rem;
+}
+.registration-page .font-brand { font-family: 'Landing Audiowide', cursive; }

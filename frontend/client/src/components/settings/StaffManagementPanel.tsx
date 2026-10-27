@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePermissions } from '@/hooks/use-permissions';
+import { useAuth } from '@/hooks/use-auth';
 import { apiFetch } from '@/lib/api';
 import { Button } from '@modl-gg/shared-web/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@modl-gg/shared-web/components/ui/card';
@@ -29,6 +30,7 @@ interface StaffMember {
 }
 
 const StaffManagementPanel = () => {
+  const { user } = useAuth();
   const { t } = useTranslation();
   const [invitationLink, setInvitationLink] = useState('');
   const { data: staff, isLoading, error, refetch: refetchStaff } = useStaff();
@@ -190,7 +192,7 @@ const StaffManagementPanel = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t('settings.staff.email')}</TableHead>
+                      <TableHead>Username</TableHead>
                       <TableHead>{t('settings.staff.role')}</TableHead>
                       <TableHead className="hidden md:table-cell">{t('settings.staff.status')}</TableHead>
                       <TableHead className="hidden lg:table-cell">{t('settings.staff.minecraftPlayer')}</TableHead>
@@ -201,7 +203,7 @@ const StaffManagementPanel = () => {
               <TableBody>
 {staff.map((member: StaffMember) => (
                   <TableRow key={member.id}>
-                    <TableCell className="max-w-[150px] truncate">{member.email}</TableCell>
+                    <TableCell className="max-w-[150px] truncate">{member.email === user?.accountId ? user.username : member.username || member.email.split('@')[0]}</TableCell>
                     <TableCell>{member.role}</TableCell>
                     <TableCell className="hidden md:table-cell">{member.status}</TableCell>
                     <TableCell className="hidden lg:table-cell">
@@ -297,8 +299,8 @@ const StaffManagementPanel = () => {
             <AlertDialogTitle>{t('common.areYouSure')}</AlertDialogTitle>
             <AlertDialogDescription>
               {selectedStaffMember?.status === 'Pending Invitation'
-                ? t('settings.staff.cancelInvitationConfirm', { email: selectedStaffMember?.email })
-                : t('settings.staff.removeStaffConfirm', { email: selectedStaffMember?.email })}
+                ? t('settings.staff.cancelInvitationConfirm', { email: selectedStaffMember?.username || selectedStaffMember?.email.split('@')[0] })
+                : t('settings.staff.removeStaffConfirm', { email: selectedStaffMember?.username || selectedStaffMember?.email.split('@')[0] })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

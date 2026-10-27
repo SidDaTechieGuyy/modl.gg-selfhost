@@ -730,7 +730,6 @@ const Settings = () => {
   const { data: quickResponsesData, isLoading: isLoadingQuickResponses } = useQuickResponses();
   const { data: statusThresholdsData, isLoading: isLoadingStatusThresholds } = useStatusThresholds();
   const { data: ticketLabelSettingsData, isLoading: isLoadingTicketLabels } = useTicketLabelSettings();
-  const [currentEmail, setCurrentEmail] = useState('');
 
   const [savingWebhookSettings, setSavingWebhookSettings] = useState(false);
 
@@ -777,10 +776,6 @@ const Settings = () => {
   // Profile settings aliases
   const profileUsername = profileUsernameState;
   
-  useEffect(() => {
-    if (user?.email) {
-      setCurrentEmail(user.email);
-    }  }, [user]);  // Initialize profile settings from user data
   useEffect(() => {
     if (user) {
       justLoadedFromServerRef.current = true; // Prevent auto-save during initial load
@@ -2744,8 +2739,6 @@ const Settings = () => {
               <AccountSettings
                 profileUsername={profileUsername}
                 setProfileUsername={setProfileUsername}
-                currentEmail={currentEmail}
-                setCurrentEmail={setCurrentEmail}
                 minecraftUsername={user?.minecraftUsername}
                 userRole={user?.role}
                 language={languageState}

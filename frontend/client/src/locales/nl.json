@@ -113,7 +113,7 @@
     "language": "Taal",
     "minecraftUsername": "Minecraft-gebruikersnaam",
     "displayNameDescription": "Je weergavenaam in ticketgesprekken en interacties.",
-    "emailDescription": "Gebruikt voor inloggen en ontvangen van ticketmeldingen.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "Voor je veiligheid worden bij het bevestigen van een nieuw e-mailadres je andere sessies afgemeld en bestaande passkeys verwijderd, dus je moet ze na het opnieuw inloggen opnieuw instellen.",
     "emailUpdated": "E-mail bijgewerkt",
     "emailUpdatedDesc": "Je e-mailadres is succesvol bijgewerkt.",
@@ -379,7 +379,7 @@
       "staffManagement": "Stafbeheer",
       "invite": "Staf uitnodigen",
       "loadFailed": "Staflijst laden mislukt.",
-      "email": "E-mail",
+      "email": "Username",
       "role": "Rol",
       "status": "Status",
       "minecraftPlayer": "Minecraft-speler",
@@ -403,7 +403,7 @@
       "cancelInvitationConfirm": "Weet je zeker dat je de uitnodiging voor {{email}} wilt annuleren?",
       "removeStaffConfirm": "Weet je zeker dat je {{email}} uit je staf wilt verwijderen?",
       "inviteNewStaffMember": "Nieuw staflid uitnodigen",
-      "inviteStaffDesc": "Stuur een uitnodigings-e-mail om een nieuw staflid toe te voegen.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Let op: iCloud Private Relay e-mailadressen ontvangen mogelijk geen uitnodigingen.",
       "selectRole": "Selecteer een rol",
       "sending": "Versturen...",
@@ -1504,8 +1504,8 @@
     "appealNotAvailableDesc": "Dit straftype kan niet worden aangevochten. Als je denkt dat dit een fout is, neem dan direct contact op met ondersteuning.",
     "submitAppeal": "Beroep indienen",
     "submitAppealDesc": "Geef gedetailleerde informatie op over waarom je denkt dat deze straf moet worden beoordeeld. Wees eerlijk en grondig in je uitleg.",
-    "emailPlaceholder": "Je e-mail voor meldingen",
-    "emailDesc": "We sturen je een melding wanneer je beroep is verwerkt",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Reden voor beroep",
     "appealReasonPlaceholder": "Leg uit waarom je denkt dat deze straf moet worden beoordeeld...",
     "appealReasonDesc": "Wees eerlijk en geef zo veel mogelijk details",
@@ -1561,6 +1561,6 @@
     "submitATicket": "Een ticket indienen",
     "selectType": "Tickettype selecteren",
     "emailAddress": "E-mailadres",
-    "emailAddressDesc": "Je e-mailadres voor antwoordmeldingen"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

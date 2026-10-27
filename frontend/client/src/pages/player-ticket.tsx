@@ -503,7 +503,7 @@ const PlayerTicket = () => {
     
     // Add email field to validation
     const isEmailRequired = formConfig.requireEmail === true;
-    const showEmailField = true;
+    const showEmailField = isEmailRequired;
     const emailField = {
       id: 'email',
       type: 'text' as const,
@@ -623,7 +623,7 @@ const PlayerTicket = () => {
         id: ticketDetails.id,
         formData: {
           subject: finalSubject,
-          creatorEmail: creatorEmail ?? undefined,
+          creatorEmail: creatorEmail || undefined,
           formData: cleanFormData,
           fieldLabels: fieldLabelsMapping,
           attachments,
@@ -710,7 +710,7 @@ const PlayerTicket = () => {
     const sectionDefinitions = formConfig.sections || [];
 
     const isEmailRequiredForRender = formConfig.requireEmail === true;
-    const showEmailFieldForRender = true;
+    const showEmailFieldForRender = isEmailRequiredForRender;
 
     if (showEmailFieldForRender) {
       const emailField = {

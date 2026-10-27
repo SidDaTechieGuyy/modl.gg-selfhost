@@ -67,6 +67,9 @@ public class RateLimitConfig {
         if (path.startsWith(RESTMappingV1.PANEL_AUTH + "/")) {
             return RateLimitTier.AUTH;
         }
+        if (path.equals(RESTMappingV1.PANEL_SETTINGS + "/factory-reset") && "POST".equalsIgnoreCase(method)) {
+            return RateLimitTier.AUTH;
+        }
 
         if (path.startsWith(RESTMappingV1.PANEL_MIGRATION + "/")) {
             return path.equals(RESTMappingV1.PANEL_MIGRATION + "/status") && "GET".equalsIgnoreCase(method)

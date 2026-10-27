@@ -1289,7 +1289,7 @@ const TicketDetail = () => {
       const isClosing = status === 'Closed';
 
       // Get current staff member's avatar from staffData
-      const currentStaff = staffData?.find((staff) => staff.username === user?.username || staff.email === user?.email);
+      const currentStaff = staffData?.find((staff) => staff.username === user?.username || staff.email === user?.accountId);
       const staffAvatar = currentStaff?.assignedMinecraftUuid ? getAvatarUrl(currentStaff.assignedMinecraftUuid, 32, true) : undefined;
 
       const newMessage = {

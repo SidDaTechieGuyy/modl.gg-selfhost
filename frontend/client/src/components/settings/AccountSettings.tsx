@@ -25,8 +25,6 @@ import { PRETTY_DATE_FORMAT, formatPrettyDateTime } from '@/utils/date-utils';
 interface AccountSettingsProps {
   profileUsername: string;
   setProfileUsername: (value: string) => void;
-  currentEmail: string;
-  setCurrentEmail: (value: string) => void;
   minecraftUsername?: string;
   userRole?: string;
   language: string;
@@ -216,7 +214,6 @@ function SessionsSection() {
 const AccountSettings = ({
   profileUsername,
   setProfileUsername,
-  currentEmail,
   minecraftUsername,
   userRole,
   language,
@@ -240,17 +237,19 @@ const AccountSettings = ({
         {/* LEFT: form fields */}
         <div className="space-y-5 pr-6">
           <div className="flex gap-3">
-            <Label htmlFor="username" className="w-36 text-sm pt-2.5 shrink-0">{t('settings.panelDisplayName')}</Label>
+            <Label htmlFor="username" className="w-36 text-sm pt-2.5 shrink-0">Username</Label>
             <div className="flex-1 max-w-xs">
               <Input
                 id="username"
                 type="text"
                 value={profileUsername}
                 onChange={(e) => setProfileUsername(e.target.value)}
-                placeholder="Enter display name"
+                placeholder="Enter username"
+                autoComplete="username"
+                maxLength={32}
               />
               <p className="text-xs text-muted-foreground mt-1.5">
-                {t('settings.displayNameDescription')}
+                Use this username to log in. Use 3–32 letters, numbers, underscores or hyphens.
               </p>
             </div>
           </div>
@@ -273,8 +272,6 @@ const AccountSettings = ({
             </div>
           )}
 
-          <div className="flex gap-3"><Label htmlFor="email-address" className="w-36 text-sm pt-2.5 shrink-0">{t('settings.email')}</Label>
-            <Input id="email-address" type="email" value={currentEmail} readOnly className="max-w-xs" /></div>
 
           <div className="flex gap-3">
             <Label htmlFor="language" className="w-36 text-sm pt-2.5 shrink-0">{t('settings.language')}</Label>

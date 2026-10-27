@@ -30,7 +30,7 @@ import { useRoles } from '@/hooks/use-data';
 import { apiFetch } from '@/lib/api';
 
 const inviteSchema = z.object({
-  email: z.string().email({ message: 'Invalid email address.' }),
+  username: z.string().regex(/^[A-Za-z0-9_-]{3,32}$/, 'Use 3–32 letters, numbers, underscores or hyphens.'),
   role: z.string().min(1, { message: 'Please select a role.' }),
 });
 
@@ -64,7 +64,7 @@ const InviteStaffModal: React.FC<InviteStaffModalProps> = ({ isOpen, onClose, on
   const form = useForm<InviteFormValues>({
     resolver: zodResolver(inviteSchema),
     defaultValues: {
-      email: '',
+      username: '',
       role: '',
     },
   });
@@ -129,12 +129,12 @@ const InviteStaffModal: React.FC<InviteStaffModalProps> = ({ isOpen, onClose, on
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
               control={form.control}
-              name="email"
+              name="username"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('settings.staff.email')}</FormLabel>
+                  <FormLabel>Username</FormLabel>
                   <FormControl>
-                    <Input placeholder="name@example.com" {...field} />
+                    <Input placeholder="moderator" autoComplete="off" maxLength={32} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

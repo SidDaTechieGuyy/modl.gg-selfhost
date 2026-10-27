@@ -113,7 +113,7 @@
     "language": "Langue",
     "minecraftUsername": "Nom d'utilisateur Minecraft",
     "displayNameDescription": "Votre nom d'affichage affiché dans les conversations de ticket et les interactions.",
-    "emailDescription": "Utilisé pour la connexion et la réception des notifications de tickets.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "Pour votre sécurité, la confirmation d'un nouvel e-mail déconnecte vos autres sessions et supprime toutes les clés d'accès, vous devrez donc les configurer à nouveau après vous être connecté.",
     "emailUpdated": "E-mail mis à jour",
     "emailUpdatedDesc": "Votre e-mail a été mis à jour avec succès.",
@@ -379,7 +379,7 @@
       "staffManagement": "Gestion du personnel",
       "invite": "Inviter du personnel",
       "loadFailed": "Échec du chargement de la liste du personnel.",
-      "email": "E-mail",
+      "email": "Username",
       "role": "Rôle",
       "status": "Statut",
       "minecraftPlayer": "Joueur Minecraft",
@@ -403,7 +403,7 @@
       "cancelInvitationConfirm": "Êtes-vous sûr de vouloir annuler l'invitation pour {{email}} ?",
       "removeStaffConfirm": "Êtes-vous sûr de vouloir retirer {{email}} de votre personnel ?",
       "inviteNewStaffMember": "Inviter un nouveau membre du personnel",
-      "inviteStaffDesc": "Envoyez un e-mail d'invitation pour ajouter un nouveau membre du personnel.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Note : les adresses e-mail de relais privé iCloud peuvent ne pas recevoir les invitations.",
       "selectRole": "Sélectionner un rôle",
       "sending": "Envoi...",
@@ -1508,8 +1508,8 @@
     "appealNotAvailableDesc": "Ce type de sanction ne peut pas faire l'objet d'un appel. Si vous pensez qu'il s'agit d'une erreur, veuillez contacter le support directement.",
     "submitAppeal": "Soumettre un appel",
     "submitAppealDesc": "Veuillez fournir des informations détaillées sur les raisons pour lesquelles vous pensez que cette sanction devrait être réexaminée. Soyez honnête et complet dans vos explications.",
-    "emailPlaceholder": "Votre e-mail pour les notifications",
-    "emailDesc": "Nous vous informerons lorsque votre appel sera traité",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Raison de l'appel",
     "appealReasonPlaceholder": "Expliquez pourquoi vous pensez que cette sanction devrait être réexaminée...",
     "appealReasonDesc": "Soyez honnête et fournissez autant de détails que possible",
@@ -1561,6 +1561,6 @@
     "submitATicket": "Soumettre un ticket",
     "selectType": "Sélectionnez le type de ticket",
     "emailAddress": "Adresse e-mail",
-    "emailAddressDesc": "Votre adresse e-mail pour les notifications de réponse"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

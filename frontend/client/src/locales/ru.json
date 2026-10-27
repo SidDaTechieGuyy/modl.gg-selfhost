@@ -115,7 +115,7 @@
     "language": "Язык",
     "minecraftUsername": "Имя пользователя Minecraft",
     "displayNameDescription": "Ваше отображаемое имя в тикетах и взаимодействиях.",
-    "emailDescription": "Используется для входа и получения уведомлений о тикетах.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "В целях безопасности подтверждение нового адреса электронной почты завершит другие сеансы и удалит ключи доступа, поэтому вам потребуется настроить их заново после входа.",
     "emailUpdated": "Email обновлен",
     "emailUpdatedDesc": "Ваш адрес электронной почты был успешно обновлен.",
@@ -382,7 +382,7 @@
       "staffManagement": "Управление персоналом",
       "invite": "Пригласить сотрудника",
       "loadFailed": "Не удалось загрузить список персонала.",
-      "email": "Email",
+      "email": "Username",
       "role": "Роль",
       "status": "Статус",
       "minecraftPlayer": "Игрок Minecraft",
@@ -406,7 +406,7 @@
       "cancelInvitationConfirm": "Вы уверены, что хотите отменить приглашение для {{email}}?",
       "removeStaffConfirm": "Вы уверены, что хотите удалить {{email}} из состава персонала?",
       "inviteNewStaffMember": "Пригласить нового сотрудника",
-      "inviteStaffDesc": "Отправьте приглашение по электронной почте для добавления нового сотрудника.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Примечание: адреса электронной почты приватного реле iCloud могут не получать приглашения.",
       "selectRole": "Выберите роль",
       "sending": "Отправка...",
@@ -1513,8 +1513,8 @@
     "appealNotAvailableDesc": "Этот тип наказания не подлежит обжалованию. Если вы считаете, что это ошибка, пожалуйста, свяжитесь с поддержкой напрямую.",
     "submitAppeal": "Отправить апелляцию",
     "submitAppealDesc": "Пожалуйста, предоставьте подробную информацию о том, почему вы считаете, что это наказание должно быть пересмотрено. Будьте честны и подробны в своем объяснении.",
-    "emailPlaceholder": "Ваша электронная почта для уведомлений",
-    "emailDesc": "Мы уведомим вас, когда ваша апелляция будет обработана",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Причина апелляции",
     "appealReasonPlaceholder": "Объясните, почему вы считаете, что это наказание должно быть пересмотрено...",
     "appealReasonDesc": "Будьте честны и предоставьте как можно больше подробностей",
@@ -1566,6 +1566,6 @@
     "submitATicket": "Отправить тикет",
     "selectType": "Выберите тип тикета",
     "emailAddress": "Адрес электронной почты",
-    "emailAddressDesc": "Ваш адрес электронной почты для получения уведомлений об ответах"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

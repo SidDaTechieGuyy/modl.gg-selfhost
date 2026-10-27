@@ -20,11 +20,11 @@ class PublicRegistrationControllerTest {
         config.setCookieSecure(false);
         var controller = new PublicRegistrationController(passwords, sessions, new CookieUtil(config));
         var server = new Server("Test", "modl_instance", "owner@example.com");
-        when(passwords.register("owner", "owner@example.com", "a-long-password!", "Test")).thenReturn(server);
+        when(passwords.register("owner", "owner", "a-long-password!", "Test")).thenReturn(server);
         var session = new AuthSessionData(); session.setId("new-random-session");
         when(sessions.createSession(eq(server), eq("owner@example.com"), any(), any())).thenReturn(session);
         var response = new MockHttpServletResponse();
-        var result = controller.register(new PublicRegistrationController.RegistrationRequest("owner", "owner@example.com", "a-long-password!", "Test"),
+        var result = controller.register(new PublicRegistrationController.RegistrationRequest("owner", "a-long-password!", "Test"),
             new MockHttpServletRequest("POST", "/v1/public/registration"), response);
         assertEquals(201, result.getStatusCode().value());
         assertEquals("new-random-session", response.getCookie("MODL_SESSION").getValue());

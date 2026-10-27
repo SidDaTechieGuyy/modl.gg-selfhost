@@ -35,7 +35,7 @@ public class PublicStaffController {
     private final RealtimeEventPublisher realtimeEventPublisher;
 
     public record AcceptRequest(@jakarta.validation.constraints.NotBlank String token,
-        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(min = 12, max = 72) String password) {}
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(min = 8, max = 72) String password) {}
 
     @PostMapping("/invitations/accept")
     public ResponseEntity<AcceptInvitationResponse> acceptInvitationPost(
@@ -43,7 +43,7 @@ public class PublicStaffController {
         Server server = RequestUtil.getRequestServer(request);
         StaffResponse staff = invitationService.acceptInvitation(server, body.token(), body.password());
         return ResponseEntity.ok(AcceptInvitationResponse.newBuilder()
-            .setMessage("Your account is ready. Log in with your email and password.")
+            .setMessage("Your account is ready. Log in with your username and password.")
             .setStaffMember(StaffInviteAcceptedMember.newBuilder().setEmail(nullToEmpty(staff.email()))
                 .setUsername(nullToEmpty(staff.username())).setRole(nullToEmpty(staff.role())).build()).build());
     }

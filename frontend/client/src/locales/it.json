@@ -113,7 +113,7 @@
     "language": "Lingua",
     "minecraftUsername": "Nome Utente Minecraft",
     "displayNameDescription": "Il tuo nome visualizzato nelle conversazioni dei ticket e nelle interazioni.",
-    "emailDescription": "Usata per l'accesso e per ricevere le notifiche dei ticket.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "Per la tua sicurezza, confermare una nuova email disconnette le tue altre sessioni e rimuove eventuali passkey, quindi dovrai configurarle di nuovo dopo aver effettuato l'accesso.",
     "emailUpdated": "Email Aggiornata",
     "emailUpdatedDesc": "La tua email è stata aggiornata con successo.",
@@ -379,7 +379,7 @@
       "staffManagement": "Gestione Staff",
       "invite": "Invita Staff",
       "loadFailed": "Impossibile caricare l'elenco dello staff.",
-      "email": "Email",
+      "email": "Username",
       "role": "Ruolo",
       "status": "Stato",
       "minecraftPlayer": "Giocatore Minecraft",
@@ -403,7 +403,7 @@
       "cancelInvitationConfirm": "Sei sicuro di voler annullare l'invito per {{email}}?",
       "removeStaffConfirm": "Sei sicuro di voler rimuovere {{email}} dal tuo staff?",
       "inviteNewStaffMember": "Invita nuovo membro dello staff",
-      "inviteStaffDesc": "Invia un'email di invito per aggiungere un nuovo membro dello staff.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Nota: gli indirizzi email iCloud private relay potrebbero non ricevere gli inviti.",
       "selectRole": "Seleziona un ruolo",
       "sending": "Invio in corso...",
@@ -1508,8 +1508,8 @@
     "appealNotAvailableDesc": "Questo tipo di punizione non è appellabile. Se ritieni che si tratti di un errore, contatta direttamente il supporto.",
     "submitAppeal": "Invia appello",
     "submitAppealDesc": "Fornisci informazioni dettagliate sul motivo per cui ritieni che questa punizione debba essere riesaminata. Sii onesto e approfondito nella tua spiegazione.",
-    "emailPlaceholder": "La tua email per le notifiche",
-    "emailDesc": "Ti avviseremo quando il tuo appello sarà stato elaborato",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Motivo dell'appello",
     "appealReasonPlaceholder": "Spiega perché ritieni che questa punizione debba essere riesaminata...",
     "appealReasonDesc": "Sii onesto e fornisci quanti più dettagli possibile",
@@ -1561,6 +1561,6 @@
     "submitATicket": "Invia un ticket",
     "selectType": "Seleziona il tipo di ticket",
     "emailAddress": "Indirizzo email",
-    "emailAddressDesc": "Il tuo indirizzo email per le notifiche di risposta"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

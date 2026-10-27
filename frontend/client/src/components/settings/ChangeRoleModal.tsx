@@ -19,6 +19,7 @@ import { useRoles } from '@/hooks/use-data';
 import { apiFetch } from '@/lib/api';
 
 interface StaffMember {
+  username?: string;
   id: string;
   email: string;
   role: string;
@@ -106,7 +107,7 @@ const ChangeRoleModal: React.FC<ChangeRoleModalProps> = ({ isOpen, onClose, staf
     <AlertDialog open={isOpen} onOpenChange={onClose}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t('settings.staff.changeRoleFor', { email: staffMember.email })}</AlertDialogTitle>
+          <AlertDialogTitle>{t('settings.staff.changeRoleFor', { email: staffMember.username || staffMember.email.split('@')[0] })}</AlertDialogTitle>
           <AlertDialogDescription>
             {staffMember.role === 'Super Admin'
               ? t('settings.staff.superAdminRoleCannotBeChanged')

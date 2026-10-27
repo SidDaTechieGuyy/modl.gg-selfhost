@@ -111,29 +111,6 @@ public class WebAuthnController {
         return ResponseEntity.ok(Map.of("challengeId", result.challengeId(), "options", options));
     }
 
-    @PostMapping("/login/options")
-    public ResponseEntity<?> loginOptions(
-        HttpServletRequest request,
-        @RequestBody @Valid LoginOptionsRequest body) throws JsonProcessingException {
-        Server server = RequestUtil.getRequestServer(request);
-
-        if (!permissionService.isAuthorizedEmail(server, body.email())) {
-            return ResponseEntity.ok(Map.of("hasPasskeys", false));
-        }
-
-        boolean hasPasskeys = webAuthnService.checkHasPasskeys(server, body.email());
-        if (!hasPasskeys) {
-            return ResponseEntity.ok(Map.of("hasPasskeys", false));
-        }
-
-        WebAuthnService.StartAuthenticationResult result = webAuthnService.startAuthentication(server, body.email());
-        Object options = objectMapper.readValue(result.optionsJson(), Object.class);
-        return ResponseEntity.ok(Map.of(
-            "hasPasskeys", true,
-            "challengeId", result.challengeId(),
-            "options", options
-        ));
-    }
 
     @PostMapping("/login/verify")
     public ResponseEntity<?> loginVerify(
@@ -165,7 +142,6 @@ public class WebAuthnController {
         @Size(max = 128) String name
     ) {}
 
-    public record LoginOptionsRequest(@Email @NotBlank @Size(max = RequestValidationLimits.EMAIL_MAX_LENGTH) String email) {}
 
     public record LoginVerifyRequest(
         @NotBlank @Size(max = 256) String challengeId,

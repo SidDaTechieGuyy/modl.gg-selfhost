@@ -113,7 +113,7 @@
     "language": "语言",
     "minecraftUsername": "Minecraft 用户名",
     "displayNameDescription": "您在工单对话和互动中显示的名称。",
-    "emailDescription": "用于登录和接收工单通知。",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "为了您的账户安全，确认新邮箱将会注销您的其他会话并移除所有通行密钥，您需要在登录后重新设置它们。",
     "emailUpdated": "邮箱已更新",
     "emailUpdatedDesc": "您的电子邮箱已成功更新。",
@@ -380,7 +380,7 @@
       "staffManagement": "工作人员管理",
       "invite": "邀请工作人员",
       "loadFailed": "加载工作人员列表失败。",
-      "email": "电子邮件",
+      "email": "Username",
       "role": "角色",
       "status": "状态",
       "minecraftPlayer": "Minecraft 玩家",
@@ -404,7 +404,7 @@
       "cancelInvitationConfirm": "您确定要取消对 {{email}} 的邀请吗？",
       "removeStaffConfirm": "您确定要将 {{email}} 从工作人员中移除吗？",
       "inviteNewStaffMember": "邀请新工作人员",
-      "inviteStaffDesc": "发送邀请电子邮件以添加新工作人员。",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "注意：iCloud 个人接力电子邮件地址可能无法接收邀请。",
       "selectRole": "选择角色",
       "sending": "发送中...",
@@ -1509,8 +1509,8 @@
     "appealNotAvailableDesc": "此处罚类型无法申诉。如果您认为这是个错误，请直接联系支持团队。",
     "submitAppeal": "提交申诉",
     "submitAppealDesc": "请提供详细信息，说明为什么您认为此处罚应该被重新审核。请诚实且详尽地进行说明。",
-    "emailPlaceholder": "用于接收通知的电子邮件",
-    "emailDesc": "我们将在您的申诉处理完毕后通知您",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "申诉原因",
     "appealReasonPlaceholder": "解释为什么您认为此处罚应当被重新审核...",
     "appealReasonDesc": "请务必诚实，并提供尽可能多的细节",
@@ -1562,6 +1562,6 @@
     "submitATicket": "提交工单",
     "selectType": "选择工单类型",
     "emailAddress": "电子邮件地址",
-    "emailAddressDesc": "用于接收答复通知的电子邮件地址"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

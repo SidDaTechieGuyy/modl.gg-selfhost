@@ -61,22 +61,25 @@ For a public instance, configure HTTPS below before creating the owner account.
 ## First setup and staff
 
 The first visit displays the registration page. Supply a server name, owner
-username, email, and password. Passwords require at least 12 characters and at most
-72 UTF-8 bytes, and are stored as salted BCrypt hashes. Email is an account
-identifier; no delivery service is needed.
+username and password (entered twice). Passwords require at least 8 characters and at most
+72 UTF-8 bytes, and are stored as salted BCrypt hashes. No email address is required.
 
 Registration initializes the existing roles, settings, forms, and default content,
 then establishes a session and opens `/panel`. Log out and use `/auth` to log back
-in with the owner username or email and password. Registration returns a conflict
+in with the owner username and password. Registration returns a conflict
 after the owner exists, and `/register` redirects to login. Concurrent registration
 requests are serialized by MongoDB's unique owner identifier. If setup is
 interrupted after the owner is saved, log in again to retry initialization.
 
 Invite staff from settings, then use **Share invitation link** in the pending
 invitation's menu. Share that link privately. The recipient sets their own password
-and logs in using the invited email. Links expire after 24 hours. Existing role
-permissions still apply. Panel display names are separate from the owner's login
-username.
+and logs in using the invited username. Links expire after 24 hours. Existing role
+permissions still apply. Changing the username in profile settings also changes
+the login username. Usernames are case-insensitive and use 3–32 letters, numbers,
+underscores or hyphens. Existing accounts retain their passwords, permissions and
+sessions; use their existing username to log in. Email login is disabled. Some
+upstream database/protocol fields retain their legacy `email` names as stable
+internal account references; new accounts store usernames in those fields.
 
 Set the Minecraft plugin's panel address to the same `BASE_URL`, and obtain its
 API key from the panel's server settings. Native `/v1/…` routes and browser
@@ -204,6 +207,27 @@ hosted database or its external files requires a separate data migration.
   the optional key before enabling AI review.
 
 ## Verification
+
+### Factory reset
+
+The owner can use **Settings → General → Server configuration → Factory reset**.
+Back up the database and uploads before proceeding. The action requires a warning
+confirmation, typing `RESET EVERYTHING` exactly, and entering the current owner
+password. Other staff cannot authorize a reset, even if they can modify settings.
+
+Reset permanently removes all application records from `modl`, `modl_instance`,
+and `training_data`, including accounts, sessions, API keys, settings, moderation
+history, tickets, audit logs, and replays. It also clears the uploads volume,
+including file metadata. Collection indexes, Docker configuration, `.env`, and
+external backups remain. Minecraft plugins must use the new API key after setup.
+
+The backend writes a durable request into the uploads volume, pauses new requests,
+then exits. Compose's `restart: unless-stopped` restarts it; cleanup runs during
+startup before serving requests, and the page waits for registration to reopen.
+If cleanup fails, startup fails and retains the request marker so the next start
+retries cleanup. Check `docker compose logs backend` and fix database or upload
+permissions rather than deleting the marker. Outside Compose, run the backend
+under a process supervisor that restarts it after exit.
 
 The backend retains its unit tests and adds password, registration, origin, and
 local-storage coverage. The frontend retains its build and tests. Run them with

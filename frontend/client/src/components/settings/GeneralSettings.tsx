@@ -11,6 +11,7 @@ import { SUPPORTED_LANGUAGES } from '@/lib/languages';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@modl-gg/shared-web/components/ui/alert-dialog';
 import { PERMISSIONS, usePermissions } from '@/hooks/use-permissions';
 import UsageSettings from './UsageSettings';
+import FactoryResetSettings from './FactoryResetSettings';
 import WebhookSettings from './WebhookSettings';
 import type { WebhookSettings as WebhookSettingsData } from './WebhookSettings';
 import MigrationTool from './MigrationTool';
@@ -337,6 +338,7 @@ const GeneralSettings = ({
       )}
 
       {visibleSection === 'server-config' && isSuperAdmin && serverConfigContent}
+      {visibleSection === 'server-config' && isSuperAdmin && <FactoryResetSettings />}
 
 
       {visibleSection === 'webhooks' && hasPermission(PERMISSIONS.ADMIN_SETTINGS_VIEW) && (

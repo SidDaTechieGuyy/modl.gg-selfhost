@@ -113,7 +113,7 @@
     "language": "Language",
     "minecraftUsername": "Minecraft Username",
     "displayNameDescription": "Your display name shown in ticket conversations and interactions.",
-    "emailDescription": "Used for login and receiving ticket notifications.",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "For your security, confirming a new email signs out your other sessions and removes any passkeys, so you'll need to set them up again after signing in.",
     "emailUpdated": "Email Updated",
     "emailUpdatedDesc": "Your email has been updated successfully.",
@@ -379,7 +379,7 @@
       "staffManagement": "Staff Management",
       "invite": "Invite Staff",
       "loadFailed": "Failed to load staff list.",
-      "email": "Email",
+      "email": "Username",
       "role": "Role",
       "status": "Status",
       "minecraftPlayer": "Minecraft Player",
@@ -403,7 +403,7 @@
       "cancelInvitationConfirm": "Are you sure you want to cancel the invitation for {{email}}?",
       "removeStaffConfirm": "Are you sure you want to remove {{email}} from your staff?",
       "inviteNewStaffMember": "Invite New Staff Member",
-      "inviteStaffDesc": "Send an invitation email to add a new staff member.",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "Note: iCloud private relay email addresses may not receive invitations.",
       "selectRole": "Select a role",
       "sending": "Sending...",
@@ -1509,8 +1509,8 @@
     "appealNotAvailableDesc": "This punishment type is not appealable. If you believe this is in error, please contact support directly.",
     "submitAppeal": "Submit Appeal",
     "submitAppealDesc": "Please provide detailed information about why you believe this punishment should be reviewed. Be honest and thorough in your explanation.",
-    "emailPlaceholder": "Your email for notifications",
-    "emailDesc": "We'll notify you when your appeal is processed",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "Appeal Reason",
     "appealReasonPlaceholder": "Explain why you believe this punishment should be reviewed...",
     "appealReasonDesc": "Be honest and provide as much detail as possible",
@@ -1561,6 +1561,6 @@
     "submitATicket": "Submit a Ticket",
     "selectType": "Select ticket type",
     "emailAddress": "Email Address",
-    "emailAddressDesc": "Your email address for response notifications"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

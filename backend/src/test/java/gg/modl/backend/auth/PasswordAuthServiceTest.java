@@ -65,17 +65,19 @@ class PasswordAuthServiceTest {
     }
 
     @Test
-    void acceptsUsernameOrEmailAndRejectsWrongCredentials() {
+    void acceptsUsernameAndRejectsEmailAndWrongCredentials() {
         when(owners.findOwner()).thenReturn(Optional.of(owner()));
         PasswordAuthService service = service();
         assertNotNull(service.login("OWNER", "a-long-password!"));
-        assertNotNull(service.login("owner@example.com", "a-long-password!"));
+        assertThrows(UnauthorizedException.class, () -> service.login("owner@example.com", "a-long-password!"));
         assertThrows(UnauthorizedException.class, () -> service.login("owner", "wrong-password"));
         assertThrows(UnauthorizedException.class, () -> service.login("stranger", "a-long-password!"));
     }
 
     @Test
     void enforcesBcryptByteLimitIncludingUnicode() {
+        assertThrows(ValidationException.class, () -> PasswordAuthService.validatePassword("1234567"));
+        assertDoesNotThrow(() -> PasswordAuthService.validatePassword("12345678"));
         assertThrows(ValidationException.class, () -> PasswordAuthService.validatePassword("short"));
         assertThrows(ValidationException.class, () -> PasswordAuthService.validatePassword("界".repeat(25)));
         assertDoesNotThrow(() -> PasswordAuthService.validatePassword("界".repeat(24)));
@@ -84,5 +86,30 @@ class PasswordAuthServiceTest {
     private OwnerCredentials owner() {
         return new OwnerCredentials("owner", "owner", "owner@example.com",
             new BCryptPasswordEncoder(4).encode("a-long-password!"), "Test");
+    }
+
+    @Test
+    void validatesAndReservesTheOwnersLoginUsername() {
+        when(owners.findOwner()).thenReturn(Optional.of(owner()));
+        var auth = service();
+        var server = auth.instance();
+        assertThrows(ValidationException.class, () -> PasswordAuthService.normalizeUsername("owner@example.com"));
+        assertThrows(ConflictException.class, () -> auth.validateAvailableUsername(server, null, "OWNER"));
+        assertEquals("moderator", auth.validateAvailableUsername(server, "staff-account", "Moderator"));
+        assertEquals("owner", auth.validateAvailableUsername(server, "owner@example.com", "OWNER"));
+    }
+
+    @Test
+    void changingOwnerUsernamePreservesTheStableLegacyAccountReference() {
+        when(owners.findOwner()).thenReturn(Optional.of(owner()));
+        var auth = service();
+        auth.updateOwnerUsername("other-account", "renamed");
+        verify(mongo, never()).updateFirst(any(org.springframework.data.mongodb.core.query.Query.class),
+            any(org.springframework.data.mongodb.core.query.Update.class), eq(OwnerCredentials.class));
+        auth.updateOwnerUsername("owner@example.com", "Renamed");
+        var update = ArgumentCaptor.forClass(org.springframework.data.mongodb.core.query.Update.class);
+        verify(mongo).updateFirst(any(org.springframework.data.mongodb.core.query.Query.class), update.capture(), eq(OwnerCredentials.class));
+        assertEquals("renamed", ((org.bson.Document) update.getValue().getUpdateObject().get("$set")).getString("username"));
+        assertFalse(update.getValue().getUpdateObject().toJson().contains("email"));
     }
 }

@@ -113,7 +113,7 @@
     "language": "言語",
     "minecraftUsername": "Minecraft ユーザー名",
     "displayNameDescription": "チケットの会話やインタラクションで表示される名前。",
-    "emailDescription": "ログインおよびチケット通知の受信に使用されます。",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "セキュリティのため、新しいメールアドレスを確認すると、他のセッションがサインアウトされ、パスキーが削除されます。サインイン後に再設定する必要があります。",
     "emailUpdated": "メールアドレスを更新しました",
     "emailUpdatedDesc": "メールアドレスが正常に更新されました。",
@@ -380,7 +380,7 @@
       "staffManagement": "スタッフ管理",
       "invite": "スタッフを招待",
       "loadFailed": "スタッフリストの読み込みに失敗しました。",
-      "email": "メールアドレス",
+      "email": "Username",
       "role": "役割",
       "status": "ステータス",
       "minecraftPlayer": "Minecraft プレイヤー",
@@ -404,7 +404,7 @@
       "cancelInvitationConfirm": "本当に {{email}} への招待をキャンセルしますか？",
       "removeStaffConfirm": "本当にスタッフから {{email}} を削除しますか？",
       "inviteNewStaffMember": "新しいスタッフメンバーを招待",
-      "inviteStaffDesc": "新しいスタッフメンバーを追加するための招待メールを送信します。",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "注意: iCloud プライベートリレーのメールアドレスは招待を受信できない場合があります。",
       "selectRole": "役割を選択",
       "sending": "送信中...",
@@ -1509,8 +1509,8 @@
     "appealNotAvailableDesc": "この処罰タイプは不服申し立てができません。エラーだと思われる場合は、直接サポートにお問い合わせください。",
     "submitAppeal": "不服申し立てを送信",
     "submitAppealDesc": "この処罰が再審査されるべきだと考える理由について、詳細な情報を入力してください。説明は誠実かつ詳細に行ってください。",
-    "emailPlaceholder": "通知用のメールアドレス",
-    "emailDesc": "不服申し立てが処理された際にお知らせします",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "不服申し立ての理由",
     "appealReasonPlaceholder": "この処罰が再審査されるべきだと考える理由を説明してください...",
     "appealReasonDesc": "誠実に記入し、できるだけ詳しく説明してください",
@@ -1562,6 +1562,6 @@
     "submitATicket": "チケットを送信する",
     "selectType": "チケットタイプを選択",
     "emailAddress": "メールアドレス",
-    "emailAddressDesc": "返信の通知を受け取るメールアドレス"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

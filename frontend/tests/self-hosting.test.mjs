@@ -8,6 +8,7 @@ import process from 'node:process';
 import console from 'node:console';
 import { URL } from 'node:url';
 import { setTimeout, clearTimeout } from 'node:timers';
+import { setTimeout as delay } from 'node:timers/promises';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { ClientHelloSchema, ClientKind, RealtimeEnvelopeSchema, Topic } from '@modl-gg/proto/modl/v1/realtime_pb.ts';
 
@@ -15,17 +16,22 @@ const base = process.env.E2E_BASE_URL || 'http://localhost:8080';
 const origin = process.env.E2E_ORIGIN || 'http://localhost:8080';
 const username = 'testowner';
 const email = 'owner@example.test';
-const password = 'Modl-test-password-2026!';
+const password = process.env.E2E_PASSWORD || 'Modl-test-password-2026!';
 let cookies = '';
 const unwrap = value => value;
 async function request(path, { method = 'GET', body, authenticated = true, headers = {} } = {}) {
-  const response = await fetch(base + path, {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(base + path, {
     method, headers: { Origin: origin, Accept: 'application/json',
       ...(authenticated && cookies ? { Cookie: cookies } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return response;
+    if (response.status !== 429 || attempt >= 4) return response;
+    const retryAfter = Number(response.headers.get('Retry-After') || 3);
+    await response.arrayBuffer();
+    await delay(Math.max(1, Math.min(60, retryAfter)) * 1000);
+  }
 }
 async function json(response, status = 200) {
   const text = await response.text();
@@ -89,7 +95,8 @@ async function main() {
   assert.equal(process.env.E2E_DISPOSABLE, '1', 'Set E2E_DISPOSABLE=1 only for a disposable instance');
   const status = await json(await request('/api/v1/public/registration/status', { authenticated: false }));
   if (status.registrationOpen) {
-    const payload = { username, email, password, serverName: 'Verification server' };
+    const payload = { username, password, serverName: 'Verification server' };
+    await json(await request('/api/v1/public/registration', { method: 'POST', body: { ...payload, password: '1234567' }, authenticated: false }), 400);
     const responses = await Promise.all([request('/api/v1/public/registration', { method: 'POST', body: payload, authenticated: false }),
       request('/api/v1/public/registration', { method: 'POST', body: payload, authenticated: false })]);
     assert.deepEqual(responses.map(r => r.status).sort(), [201, 409], 'Exactly one racing registration must succeed');
@@ -99,10 +106,11 @@ async function main() {
     await json(login); saveSession(login);
   }
   assert.equal((await json(await request('/api/v1/public/registration/status'))).registrationOpen, false);
-  await json(await request('/api/v1/public/registration', { method: 'POST', body: { username, email, password, serverName: 'Other' } }), 409);
+  await json(await request('/api/v1/public/registration', { method: 'POST', body: { username, password, serverName: 'Other' } }), 409);
   await json(await request('/api/v1/panel/auth/login', { method: 'POST', body: { identifier: username, password: 'incorrect-password' } }), 401);
   const me = await json(await request('/api/v1/panel/auth/me'));
-  assert.ok(JSON.stringify(me).includes(email));
+  assert.equal(me.username, username);
+  await json(await request('/api/v1/panel/auth/login', { method: 'POST', body: { identifier: email, password }, authenticated: false }), 401);
   const preflight = await request('/api/v1/panel/auth/me', { method: 'OPTIONS', headers: { 'Access-Control-Request-Method': 'GET' } });
   assert.ok(preflight.ok);
   assert.equal(preflight.headers.get('access-control-allow-origin'), origin);
@@ -133,6 +141,13 @@ async function main() {
     uploadType: 'article', fileName: 'bad.exe', contentType: 'application/octet-stream', fileSize: '1',
   } }), 400);
   console.log('PASS: local upload, confirmation, authenticated metadata, signed download and invalid links');
+  const publicTicket = await request('/api/v1/public/tickets', { method: 'POST', authenticated: false, body: {
+    type: 'support', subject: 'Support without an email', description: 'Email delivery is not configured.', creatorName: 'TestPlayer',
+  } });
+  await json(publicTicket, 201);
+  assert.ok(publicTicket.headers.getSetCookie().some(value => value.startsWith('ticket_auth_')));
+  console.log('PASS: public support ticket creation without an email address');
+
   const ticket = await json(await request('/api/v1/panel/tickets', { method: 'POST', body: {
     type: 'support', subject: 'Access link verification', description: 'Private ticket fixture', creatorName: 'Test player',
   } }), 201);
@@ -146,8 +161,10 @@ async function main() {
   const roles = await json(await request('/api/v1/panel/roles'));
   const role = roles.roles.find(r => r.name.toLowerCase() === 'moderator') || roles.roles.find(r => r.name !== 'Super Admin');
   assert.ok(role);
-  const staffEmail = 'staff-' + randomBytes(5).toString('hex') + '@example.test';
-  await json(await request('/api/v1/panel/staff/invite', { method: 'POST', body: { email: staffEmail, role: role.name } }), 201);
+  const staffEmail = 'staff-' + randomBytes(5).toString('hex');
+  await json(await request('/api/v1/panel/staff/invite', { method: 'POST', body: { username: staffEmail + '@example.test', role: role.name } }), 400);
+  await json(await request('/api/v1/panel/staff/invite', { method: 'POST', body: { username, role: role.name } }), 409);
+  await json(await request('/api/v1/panel/staff/invite', { method: 'POST', body: { username: staffEmail, role: role.name } }), 201);
   const staffList = await json(await request('/api/v1/panel/staff'));
   const pending = staffList.staff.find(member => member.email === staffEmail);
   assert.ok(pending);
@@ -159,7 +176,9 @@ async function main() {
   await json(staffLogin); saveSession(staffLogin);
   const staffMe = await json(await request('/api/v1/panel/auth/me'));
   assert.ok(JSON.stringify(staffMe).includes(staffEmail));
-  assert.ok(!JSON.stringify(staffMe).includes(email), 'Staff login must not become the owner');
+  assert.equal(staffMe.username, staffEmail);
+  assert.notEqual(staffMe.role, 'Super Admin', 'Staff login must not become the owner');
+  await json(await request('/api/v1/panel/auth/profile', { method: 'PATCH', body: { username } }), 409);
   await json(await request('/api/v1/panel/auth/logout', { method: 'POST' }));
   cookies = ownerCookies;
   console.log('PASS: password-based staff invitation and independent staff session');
@@ -168,12 +187,23 @@ async function main() {
   await json(await request('/api/v1/panel/auth/logout', { method: 'POST' }));
   cookies = oldCookie;
   assert.equal((await request('/api/v1/panel/auth/me')).status, 401, 'Logout must invalidate the stored session');
-  for (const identifier of [username, email]) {
+  for (const identifier of [username, username.toUpperCase()]) {
     const login = await request('/api/v1/panel/auth/login', { method: 'POST', body: { identifier, password } });
     await json(login); saveSession(login);
     assert.equal((await request('/api/v1/panel/auth/me')).status, 200);
     await json(await request('/api/v1/panel/auth/logout', { method: 'POST' }));
   }
-  console.log('PASS: logout revocation and login by both username and email');
+  const login = await request('/api/v1/panel/auth/login', { method: 'POST', body: { identifier: username, password } });
+  await json(login); saveSession(login);
+  const renamed = 'renamedowner';
+  await json(await request('/api/v1/panel/auth/profile', { method: 'PATCH', body: { username: renamed } }));
+  assert.equal((await json(await request('/api/v1/panel/auth/me'))).username, renamed);
+  await json(await request('/api/v1/panel/auth/logout', { method: 'POST' }));
+  await json(await request('/api/v1/panel/auth/login', { method: 'POST', body: { identifier: username, password } }), 401);
+  const renamedLogin = await request('/api/v1/panel/auth/login', { method: 'POST', body: { identifier: renamed.toUpperCase(), password } });
+  await json(renamedLogin); saveSession(renamedLogin);
+  await json(await request('/api/v1/panel/auth/profile', { method: 'PATCH', body: { username } }));
+  await json(await request('/api/v1/panel/auth/logout', { method: 'POST' }));
+  console.log('PASS: username-only login, email rejection, case-insensitivity, owner rename persistence and logout revocation');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

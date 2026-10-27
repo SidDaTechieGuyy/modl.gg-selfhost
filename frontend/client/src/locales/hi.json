@@ -113,7 +113,7 @@
     "language": "भाषा",
     "minecraftUsername": "Minecraft उपयोगकर्ता नाम",
     "displayNameDescription": "टिकट बातचीत और बातचीत में दिखाया जाने वाला आपका नाम।",
-    "emailDescription": "लॉगिन और टिकट सूचनाएं प्राप्त करने के लिए उपयोग किया जाता है।",
+    "emailDescription": "Used as your login identifier.",
     "emailChangeWarning": "आपकी सुरक्षा के लिए, एक नए ईमेल की पुष्टि करने से आपके अन्य सत्रों से साइन आउट हो जाएगा और कोई भी पासकी हट जाएगी, और साइन इन करने के बाद आपको उन्हें फिर से सेट करना होगा।",
     "emailUpdated": "ईमेल अपडेट हो गया",
     "emailUpdatedDesc": "आपका ईमेल सफलतापूर्वक अपडेट कर दिया गया है।",
@@ -380,7 +380,7 @@
       "staffManagement": "स्टाफ प्रबंधन",
       "invite": "स्टाफ आमंत्रित करें",
       "loadFailed": "स्टाफ सूची लोड करने में विफल।",
-      "email": "ईमेल",
+      "email": "Username",
       "role": "भूमिका",
       "status": "स्थिति",
       "minecraftPlayer": "Minecraft खिलाड़ी",
@@ -404,7 +404,7 @@
       "cancelInvitationConfirm": "क्या आप वाकई {{email}} के लिए आमंत्रण रद्द करना चाहते हैं?",
       "removeStaffConfirm": "क्या आप वाकई {{email}} को अपने स्टाफ से हटाना चाहते हैं?",
       "inviteNewStaffMember": "नए स्टाफ सदस्य को आमंत्रित करें",
-      "inviteStaffDesc": "एक नया स्टाफ सदस्य जोड़ने के लिए एक आमंत्रण ईमेल भेजें।",
+      "inviteStaffDesc": "Choose a username and role, then share the private invitation link.",
       "iCloudNotice": "नोट: iCloud निजी रिले ईमेल पते आमंत्रण प्राप्त नहीं कर सकते हैं।",
       "selectRole": "एक भूमिका चुनें",
       "sending": "भेजा जा रहा है...",
@@ -1509,8 +1509,8 @@
     "appealNotAvailableDesc": "इस सजा प्रकार की अपील नहीं की जा सकती। यदि आपको लगता है कि यह कोई त्रुटि है, तो कृपया सीधे सहायता टीम से संपर्क करें।",
     "submitAppeal": "अपील सबमिट करें",
     "submitAppealDesc": "कृपया विस्तृत जानकारी प्रदान करें कि आपको क्यों लगता है कि इस सजा की समीक्षा की जानी चाहिए। अपने स्पष्टीकरण में ईमानदार और संपूर्ण रहें।",
-    "emailPlaceholder": "सूचनाओं के लिए आपका ईमेल",
-    "emailDesc": "आपकी अपील संसाधित होने पर हम आपको सूचित करेंगे",
+    "emailPlaceholder": "Contact email",
+    "emailDesc": "Contact email recorded with this appeal. Check this page for updates.",
     "appealReason": "अपील का कारण",
     "appealReasonPlaceholder": "बताएं कि आपको क्यों लगता है कि इस सजा की समीक्षा की जानी चाहिए...",
     "appealReasonDesc": "ईमानदार रहें और जितना संभव हो उतना विवरण प्रदान करें",
@@ -1562,6 +1562,6 @@
     "submitATicket": "एक टिकट सबमिट करें",
     "selectType": "टिकट का प्रकार चुनें",
     "emailAddress": "ईमेल पता",
-    "emailAddressDesc": "प्रतिक्रिया सूचनाओं के लिए आपका ईमेल पता"
+    "emailAddressDesc": "Contact email recorded with this ticket. Updates appear here, not by email."
   }
 }

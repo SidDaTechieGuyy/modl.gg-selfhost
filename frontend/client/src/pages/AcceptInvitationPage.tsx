@@ -26,10 +26,10 @@ export default function AcceptInvitationPage() {
   }
   return <PageContainer><form onSubmit={accept} className="mx-auto max-w-md space-y-4 p-8">
     <h1 className="text-2xl font-bold">Accept staff invitation</h1>
-    <p>Create a password, then log in using the email address your invitation was created for.</p>
+    <p>Create a password, then log in using the username your invitation was created for.</p>
     {!token && <p role="alert">This invitation link is incomplete.</p>}
     <Label htmlFor="invite-password">Password</Label>
-    <Input id="invite-password" type="password" autoComplete="new-password" minLength={12} required value={password} onChange={e => setPassword(e.target.value)} />
+    <Input id="invite-password" type="password" autoComplete="new-password" minLength={8} required value={password} onChange={e => setPassword(e.target.value)} />
     {error && <p role="alert" className="text-destructive">{error}</p>}
     <Button type="submit" disabled={busy || !token}>{busy ? 'Creating account…' : 'Create account'}</Button>
   </form></PageContainer>;
