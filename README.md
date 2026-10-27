@@ -1,4 +1,4 @@
-# modl — self-hosted instance
+# modl.gg — self-hosted instance
 
 The existing modl panel and Java backend, adapted for one operator on one domain.
 First-boot registration reuses the upstream landing page; accounts use usernames
