@@ -14,7 +14,7 @@ import org.springframework.web.socket.WebSocketHandler;
 
 class OriginHandshakeInterceptorTest {
     @ParameterizedTest
-    @ValueSource(strings = {"*", "dynamic", "https://panel.duckdns.org,https://other.example"})
+    @ValueSource(strings = {"https://panel.duckdns.org", "https://panel.duckdns.org:443", "https://panel.duckdns.org/"})
     void handshakeAndPanelAuthenticationUseTheSamePolicy(String setting) {
         var policy = new AllowedOrigins(setting);
         var request = mock(ServerHttpRequest.class);
@@ -24,6 +24,9 @@ class OriginHandshakeInterceptorTest {
         var interceptor = new OriginHandshakeInterceptor(policy);
         assertTrue(interceptor.beforeHandshake(request, mock(ServerHttpResponse.class), mock(WebSocketHandler.class), new HashMap<>()));
         assertTrue(new RealtimeOriginValidator(policy).isAllowedPanelOrigin(headers.getOrigin(), "instance"));
+        headers.setOrigin("https://unrelated.example");
+        assertFalse(interceptor.beforeHandshake(request, mock(ServerHttpResponse.class), mock(WebSocketHandler.class), new HashMap<>()));
+        assertFalse(new RealtimeOriginValidator(policy).isAllowedPanelOrigin(headers.getOrigin(), "instance"));
         headers.setOrigin("null");
         assertFalse(interceptor.beforeHandshake(request, mock(ServerHttpResponse.class), mock(WebSocketHandler.class), new HashMap<>()));
         assertFalse(new RealtimeOriginValidator(policy).isAllowedPanelOrigin("null", "instance"));

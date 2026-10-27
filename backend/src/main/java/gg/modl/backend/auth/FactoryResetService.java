@@ -66,7 +66,7 @@ public class FactoryResetService {
             // Never follow symlinks or delete the mounted directory itself. Keep the marker until ALL steps succeed.
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    if (!file.equals(marker)) Files.delete(file);
+                    if (!file.equals(marker) && !file.equals(root.resolve(".instance-secret"))) Files.delete(file);
                     return FileVisitResult.CONTINUE;
                 }
                 @Override public FileVisitResult postVisitDirectory(Path directory, IOException error) throws IOException {

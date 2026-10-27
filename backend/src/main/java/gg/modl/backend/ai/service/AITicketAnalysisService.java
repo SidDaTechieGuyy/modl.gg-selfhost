@@ -39,6 +39,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class AITicketAnalysisService {
     private final LLMService llmService;
+    private final AIUsageService aiUsageService;
     private final AIModerationSettingsService aiModerationSettingsService;
     private final TicketMongoRepository ticketRepository;
     private final PunishmentLifecycleService punishmentLifecycleService;
@@ -85,6 +86,7 @@ public class AITicketAnalysisService {
         final String rawResponse;
         try {
             rawResponse = llmService.generate(prompt.systemInstruction(), prompt.userContent());
+            aiUsageService.recordSuccessfulRequest(server, "moderation");
         } catch (Exception e) {
             log.error("LLM generation failed for ticket {}", ticketId, e);
             return;

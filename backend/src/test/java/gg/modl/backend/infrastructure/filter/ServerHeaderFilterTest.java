@@ -15,12 +15,12 @@ class ServerHeaderFilterTest {
         var servers = mock(ServerService.class);
         var server = new Server("Test", "modl_instance", "owner@example.com");
         when(servers.getInstance()).thenReturn(server);
-        var filter = new ServerHeaderFilter(servers, new AllowedOrigins("*"));
+        var filter = new ServerHeaderFilter(servers, new AllowedOrigins("https://panel.duckdns.org"));
         for (String host : new String[]{"panel.duckdns.org", "localhost", "different.example"}) {
             var request = new MockHttpServletRequest("GET", "/v1/panel/auth/me");
             request.setServerName(host);
             request.addHeader("X-Server-Domain", "untrusted.example");
-            request.addHeader("Origin", "https://" + host);
+            request.addHeader("Origin", "https://panel.duckdns.org");
             var response = new MockHttpServletResponse();
             filter.doFilter(request, response, new MockFilterChain());
             assertSame(server, request.getAttribute(RequestAttribute.SERVER));

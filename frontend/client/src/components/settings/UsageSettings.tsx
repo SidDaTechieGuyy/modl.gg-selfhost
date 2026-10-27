@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HardDrive, Search, Trash2, Download, FolderOpen, Calendar, AlertCircle, Play, Info } from 'lucide-react';
+import { HardDrive, Search, Trash2, Download, FolderOpen, Calendar, AlertCircle, Play, Info, Brain } from 'lucide-react';
 import { getApiUrl, apiFetch } from '@/lib/api';
 import { Button } from '@modl-gg/shared-web/components/ui/button';
 import { Input } from '@modl-gg/shared-web/components/ui/input';
@@ -42,10 +42,17 @@ interface StorageUsage {
   byType: Record<string, number>;
 }
 
+interface AIUsage {
+  usage: { period: string; totalUsed: number; byService: Record<string, number>; trackingAvailable: boolean };
+  providerAvailable: boolean;
+}
+
 const UsageSettings = () => {
   const { toast } = useToast();
   const { t } = useTranslation();
   const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
+  const [aiUsage, setAIUsage] = useState<AIUsage | null>(null);
+  const [aiError, setAIError] = useState(false);
   const [files, setFiles] = useState<StorageFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,6 +72,13 @@ const UsageSettings = () => {
 
   useEffect(() => {
     void fetchStorageData();
+    const controller = new AbortController();
+    fetch(getApiUrl('/v1/panel/settings/ai-usage'), { credentials: 'include', signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error('Unable to load AI usage');
+        setAIUsage(await response.json() as AIUsage);
+      }).catch(error => { if (error.name !== 'AbortError') setAIError(true); });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -350,7 +364,7 @@ const UsageSettings = () => {
   return (
     <div className="space-y-6">
       {storageUsage && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           <Card className="rounded-card shadow-card-inner bg-surface-2">
             <CardHeader><CardTitle className="flex items-center"><HardDrive className="h-5 w-5 mr-2" />{t('settings.usage.storageUsage')}</CardTitle></CardHeader>
             <CardContent><div className="space-y-4">
@@ -365,6 +379,32 @@ const UsageSettings = () => {
                   </div>
                 ))}</div>
               </div>
+            </div></CardContent>
+          </Card>
+          {/* Restored from the upstream AI Usage card, with self-hosted request counts. */}
+          <Card className="rounded-card shadow-card-inner bg-surface-2">
+            <CardHeader><CardTitle className="flex items-center">
+              <Brain className="h-5 w-5 mr-2" />{t('settings.usage.aiUsage')}
+            </CardTitle></CardHeader>
+            <CardContent><div className="space-y-4">
+              {aiError ? <p role="alert" className="text-sm text-destructive">Unable to load AI usage. Reload to try again.</p>
+                : !aiUsage ? <p className="text-sm text-muted-foreground">Loading AI usage…</p> : <>
+                  <div>
+                    <div className="flex justify-between gap-2 text-sm mb-2">
+                      <span>{t('settings.usage.used')}: {Number(aiUsage.usage.totalUsed).toLocaleString()} requests</span>
+                      <span className="text-muted-foreground">No instance limit</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Successful requests this UTC month ({aiUsage.usage.period}). Counts start after this update.</p>
+                  </div>
+                  <div className="border-t pt-4 mt-4 space-y-1">
+                    <div className="text-xs font-medium text-muted-foreground">{t('settings.usage.aiBreakdown')}</div>
+                    {Object.entries(aiUsage.usage.byService).map(([service, count]) => <div key={service} className="flex justify-between text-xs">
+                      <span className="capitalize">{service.replaceAll('_', ' ')}:</span><span>{Number(count).toLocaleString()}</span>
+                    </div>)}
+                  </div>
+                  {!aiUsage.usage.trackingAvailable && <p role="alert" className="text-xs text-destructive">Some usage could not be recorded. Check backend logs.</p>}
+                  {!aiUsage.providerAvailable && <p className="text-xs text-muted-foreground">AI provider unavailable. Configure GEMINI_API_KEY to enable AI moderation.</p>}
+                </>}
             </div></CardContent>
           </Card>
           <Card className="rounded-card shadow-card-inner bg-surface-2">

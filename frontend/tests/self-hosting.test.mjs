@@ -46,14 +46,14 @@ function saveSession(response) {
 }
 function localPath(url) { const parsed = new URL(url); return parsed.pathname + parsed.search; }
 
-async function websocket(allowedOrigin, expectedStatus) {
+async function websocket(allowedOrigin, expectedStatus, plugin) {
   return new Promise((resolve, reject) => {
     const url = new URL('/api/v1/realtime/ws', base);
     const timeout = setTimeout(() => { req.destroy(); reject(new Error('WebSocket handshake timed out')); }, 15000);
     const finish = error => { clearTimeout(timeout); if (error) reject(error); else resolve(); };
     const req = http.request(url, { headers: { Connection: 'Upgrade', Upgrade: 'websocket',
       'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
-      Origin: allowedOrigin, Cookie: cookies } });
+      ...(plugin ? { 'X-API-Key': plugin.apiKey } : { Origin: allowedOrigin, Cookie: cookies }) } });
     req.on('error', finish);
     req.on('response', response => {
       response.resume();
@@ -63,7 +63,9 @@ async function websocket(allowedOrigin, expectedStatus) {
       if (expectedStatus !== 101) { socket.destroy(); finish(new Error('Untrusted origin upgraded')); return; }
       const hello = toBinary(RealtimeEnvelopeSchema, create(RealtimeEnvelopeSchema, {
         protocolVersion: 1, payload: { case: 'clientHello', value: create(ClientHelloSchema, {
-          clientKind: ClientKind.PANEL, protocolVersion: 1, supportedTopics: [Topic.PANEL_DASHBOARD],
+          clientKind: plugin ? ClientKind.MINECRAFT_PLUGIN : ClientKind.PANEL, protocolVersion: 1,
+          supportedTopics: plugin ? [] : [Topic.PANEL_DASHBOARD],
+          ...(plugin ? { serverInstanceId: plugin.instanceId, serverName: 'Synthetic plugin' } : {}),
         }) },
       }));
       assert.ok(hello.length < 126);
@@ -117,11 +119,22 @@ async function main() {
   assert.equal(preflight.headers.get('access-control-allow-credentials'), 'true');
   const untrusted = 'https://untrusted.invalid';
   const denied = await request('/api/v1/panel/auth/me', { method: 'OPTIONS', headers: { Origin: untrusted, 'Access-Control-Request-Method': 'GET' } });
-  const permissive = process.env.E2E_PERMISSIVE_ORIGINS === '1';
-  assert.equal(denied.status, permissive ? 200 : 403);
-  if (permissive) assert.equal(denied.headers.get('access-control-allow-origin'), untrusted);
+  assert.equal(denied.status, 403);
   await websocket(origin, 101);
-  await websocket(untrusted, permissive ? 101 : 403);
+  await websocket(untrusted, 403);
+  const aiUsage = await json(await request('/api/v1/panel/settings/ai-usage'));
+  assert.equal(aiUsage.usage.totalUsed, 0);
+  assert.equal(aiUsage.providerAvailable, false);
+  assert.equal(aiUsage.usage.trackingAvailable, true);
+  const pluginKey = await json(await request('/api/v1/panel/settings/api-keys/default/reveal'));
+  const startup = await json(await fetch(base + '/v2/minecraft/startup', { method: 'POST',
+    headers: { 'X-API-Key': pluginKey.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({
+      serverVersion: '1.21.4', platformType: 'PAPER', pluginVersion: 'test', maxPlayers: 20, serverName: 'Synthetic plugin',
+    }) }));
+  assert.equal(startup.panelUrl, origin);
+  assert.equal(startup.realtimeUrl, origin.replace(/^http/, 'ws') + '/api/v1/realtime/ws');
+  await websocket(null, 101, { apiKey: pluginKey.apiKey, instanceId: startup.serverInstanceId });
+  console.log('PASS: automatic BASE_URL origin policy, native /v2 plugin startup, and persisted AI usage endpoint');
   console.log('PASS: owner registration closure, authentication, HTTP origins and authenticated realtime');
 
   const data = Buffer.from('Self-hosted persistent upload verification.\n');

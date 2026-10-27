@@ -46,6 +46,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class AITicketAnalysisServiceTest {
+    private final AIUsageService aiUsageService = org.mockito.Mockito.mock(AIUsageService.class);
 
     @Mock
     private LLMService llmService;
@@ -77,6 +78,7 @@ class AITicketAnalysisServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         aiTicketAnalysisService = new AITicketAnalysisService(
             llmService,
+            aiUsageService,
             aiModerationSettingsService,
             ticketRepository,
             punishmentLifecycleService,
@@ -254,6 +256,7 @@ class AITicketAnalysisServiceTest {
             """);
 
         aiTicketAnalysisService.analyzeTicketAsync(server, "REPORT-3");
+        verify(aiUsageService).recordSuccessfulRequest(server, "moderation");
 
         verify(punishmentLifecycleService, times(1)).createPunishment(any(Server.class), any(UUID.class), any());
 

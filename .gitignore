@@ -1,4 +1,6 @@
 .env
+.instance-secret
+.secret-*.tmp
 .env.*.local
 *.log
 backups/

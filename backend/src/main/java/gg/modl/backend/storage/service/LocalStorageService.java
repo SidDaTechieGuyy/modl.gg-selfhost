@@ -32,7 +32,7 @@ public class LocalStorageService {
     public record Transfer(String operation, String key, String contentType, long size, long expiresAt) {}
 
     public LocalStorageService(@Value("${modl.storage.directory:/app/uploads}") String directory,
-                               @Value("${SESSION_SECRET}") String secret,
+                               @Value("#{@instanceSecret.value}") String secret,
                                @Value("${BASE_URL:http://localhost:8080}") String baseUrl) {
         if (secret == null || secret.length() < 32) throw new IllegalArgumentException("SESSION_SECRET must have at least 32 characters");
         this.secret = secret.getBytes(StandardCharsets.UTF_8);

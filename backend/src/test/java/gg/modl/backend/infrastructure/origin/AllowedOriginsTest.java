@@ -6,32 +6,27 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class AllowedOriginsTest {
-    @ParameterizedTest
-    @ValueSource(strings = {"*", "dynamic"})
-    void reflectsAnyValidBrowserOrigin(String setting) {
-        AllowedOrigins policy = new AllowedOrigins(setting);
-        assertTrue(policy.allows("https://moderation.duckdns.org"));
-        assertTrue(policy.allows("http://localhost:8123"));
-        assertFalse(policy.allows("null"));
-        assertFalse(policy.allows(null));
-        assertFalse(policy.allows("https://example.org/path"));
-        assertFalse(policy.allows("https://user@example.org"));
-        assertFalse(policy.allows("file:///etc/passwd"));
+    @Test void trustsOnlyTheConfiguredBaseUrl() {
+        var policy = new AllowedOrigins("https://moderation.duckdns.org/");
+        assertTrue(policy.allows("https://MODERATION.duckdns.org:443"));
+        assertFalse(policy.allows("https://other.duckdns.org"));
+        assertFalse(policy.allows("http://moderation.duckdns.org"));
+        assertFalse(policy.allows("https://moderation.duckdns.org:8443"));
+        assertFalse(policy.allows("https://moderation.duckdns.org.evil.org"));
     }
-
-    @Test
-    void exactListChecksSchemeHostAndPort() {
-        AllowedOrigins policy = new AllowedOrigins(" https://panel.example.org, http://localhost:8123 ");
-        assertTrue(policy.allows("https://PANEL.example.org:443"));
-        assertTrue(policy.allows("http://localhost:8123"));
-        assertFalse(policy.allows("http://panel.example.org"));
-        assertFalse(policy.allows("https://panel.example.org.evil.org"));
-        assertFalse(policy.allows("http://localhost:8124"));
+    @Test void supportsLocalAndIpv6Origins() {
+        assertTrue(new AllowedOrigins("http://localhost:8080").allows("http://localhost:8080"));
+        assertFalse(new AllowedOrigins("http://localhost:8080").allows("http://127.0.0.1:8080"));
+        assertTrue(new AllowedOrigins("http://[::1]:8080").allows("http://[::1]:8080"));
     }
-
     @ParameterizedTest
-    @ValueSource(strings = {"", "https://example.org,", "*,https://example.org", "null", "https://example.org/", "example.org"})
-    void rejectsInvalidSettingsAtStartup(String setting) {
-        assertThrows(IllegalArgumentException.class, () -> new AllowedOrigins(setting));
+    @ValueSource(strings = {"", "*", "dynamic", "https://example.org,https://other.org", "null", "https://example.org/path", "https://user@example.org", "https://example.org?x=1", "https://example.org#x", "example.org"})
+    void rejectsInvalidBaseUrlsAtStartup(String value) {
+        assertThrows(IllegalArgumentException.class, () -> new AllowedOrigins(value));
+    }
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "https://example.org/path", "https://user@example.org", "file:///tmp/file", "https://example.org/"})
+    void rejectsMalformedRequestOrigins(String value) {
+        assertFalse(new AllowedOrigins("https://example.org").allows(value));
     }
 }

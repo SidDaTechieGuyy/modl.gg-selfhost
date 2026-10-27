@@ -10,7 +10,7 @@ import org.springframework.web.cors.DefaultCorsProcessor;
 
 class DynamicCorsConfigurationSourceTest {
     @ParameterizedTest
-    @ValueSource(strings = {"*", "dynamic", "https://panel.duckdns.org,https://other.example"})
+    @ValueSource(strings = {"https://panel.duckdns.org", "https://panel.duckdns.org:443", "https://panel.duckdns.org/"})
     void credentialedPreflightReflectsThePermittedRequestOrigin(String setting) throws Exception {
         var request = new MockHttpServletRequest("OPTIONS", "/v1/panel/auth/login");
         request.addHeader("Origin", "https://panel.duckdns.org");

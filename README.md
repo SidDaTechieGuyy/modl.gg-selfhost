@@ -13,6 +13,7 @@ All installation, operation, testing, validation and provenance notes are collec
 - [Prerequisites](#prerequisites)
 - [Install and configure](#install-and-configure)
 - [First setup and staff](#first-setup-and-staff)
+- [Minecraft plugin connection](#minecraft-plugin-connection)
 - [HTTPS with Caddy](#https-with-caddy) or [nginx](#https-with-nginx)
 - [Persistence and backups](#persistence-and-backups)
 - [Troubleshooting](#troubleshooting)
@@ -42,34 +43,36 @@ Clone **this converted repository**, then enter its root:
 git clone https://github.com/SidDaTechieGuyy/modl.gg-selfhost.git modl-selfhost
 cd modl-selfhost
 cp .env.example .env
-openssl rand -hex 32
 ```
 
-Put the generated value in `SESSION_SECRET`, then edit the other settings:
+Edit `.env` for your public address. No signing secret needs to be entered:
 
 | Variable | Meaning |
 | --- | --- |
 | `BASE_URL` | Public address including its scheme and optional port, with no path or trailing slash. Use `http://localhost:8080` locally or your `https://…` address publicly. |
 | `MONGODB_URI` | Database connection; the supplied Compose address works without modification. |
-| `SESSION_SECRET` | At least 32 random characters. Signs file and player-ticket capabilities. Preserve it with backups. |
-| `CORS_ALLOWED_ORIGINS` | One origin, a comma-separated list, `*`, or `dynamic`. Origins include scheme and port, and must not contain a path or trailing slash. |
 | `GEMINI_API_KEY` | Optional. Needed only if you enable the external AI moderation provider. |
 
 For example, a public instance can use:
 
 ```dotenv
 BASE_URL=https://moderation.example.org
-CORS_ALLOWED_ORIGINS=https://moderation.example.org
 ```
 
-The `*` and `dynamic` settings both accept valid incoming HTTP(S) origins and echo
-the actual origin, with credentials enabled. An explicit list trusts only those
-origins. The same policy governs HTTP, browser request checks, and WebSockets.
-Opaque origins such as `null` are rejected. Native plugin WebSockets may omit
-Origin but still require their API key. Browsers can independently restrict
-third-party cookies; serving the panel and API on the supplied single domain
-avoids that problem. HTTPS sessions use Secure, HTTP-only, SameSite=None cookies;
-local HTTP sessions use SameSite=Lax.
+HTTP, request validation and browser WebSockets automatically trust the origin in
+`BASE_URL`, including its scheme, hostname and port. Other browser origins and
+opaque origins such as `null` are rejected. There is no separate origin setting.
+Native plugin WebSockets may omit Origin but still require their API key.
+HTTPS sessions use Secure, HTTP-only, SameSite=None cookies; local HTTP sessions
+use SameSite=Lax.
+
+The backend generates a cryptographically random signing key on first boot and
+stores it at `/app/uploads/.instance-secret` with owner-only permissions. Keep
+this hidden file in uploads backups. It survives restarts and factory resets.
+An existing `SESSION_SECRET` environment value is imported on the first upgrade
+so existing file and ticket links keep working. Once that upgrade starts
+successfully, the old environment value can be removed. An override that differs
+from the persisted key is rejected rather than silently invalidating links.
 
 ```sh
 docker compose up --build -d
@@ -104,12 +107,54 @@ upstream database/protocol fields retain their legacy `email` names as stable
 internal account references; new accounts store usernames in those fields.
 
 Set the Minecraft plugin's panel address to the same `BASE_URL`, and obtain its
-API key from the panel's server settings. Native `/v1/…` routes and browser
+API key from the panel's server settings. Native `/v1/…`, `/v2/…` and `/v3/…` routes and browser
 `/api/v1/…` routes both reach the backend. Realtime uses the same domain at
 `/api/v1/realtime/ws`, with its scheme derived from `BASE_URL`.
 
 New player tickets receive an access capability in their browser. Keep the
 original ticket link/browser data; a ticket identifier alone does not grant access.
+
+## Minecraft plugin connection
+
+Checked upstream [modl-gg/minecraft](https://github.com/modl-gg/minecraft) at
+commit `dffdf727875bcca11ae62fb26b742d1c3d6533e4`. You do not need to edit or rebuild
+the plugin to change its backend host.
+
+1. Complete registration in this web app and copy its API key from **Settings →
+   General → Server Config**.
+2. Put that key in the plugin's data-directory `boot.yml` under `api-key`.
+   Choose `mode: standalone` for a single Paper/Spigot server, or use the plugin's
+   proxy/bridge deployment modes as appropriate. Leave `testing-api: false`.
+3. Set the **Minecraft server process** environment variable to your public origin:
+
+   `MODL_API_URL=https://moderation.example.org`
+
+   Alternatively, put the JVM option **before** `-jar` in its startup command:
+
+   `java -Dmodl.api.url=https://moderation.example.org -jar paper.jar nogui`
+
+4. Restart the Minecraft server. Set this on the proxy/core process when using
+   proxy mode. Bridge-only servers connect to that core using their bridge settings.
+
+Use the origin only: do not append `/api`, `/v1`, `/v2` or `/v3`. The JVM
+property takes precedence over the environment variable. These are plugin settings,
+not additional variables needed by this application's Compose stack. A localhost
+address only works when it is reachable from the Minecraft process; a different
+machine/container must use your reachable public HTTPS address.
+
+The plugin's [BackendHost](https://github.com/modl-gg/minecraft/blob/dffdf727875bcca11ae62fb26b742d1c3d6533e4/core/src/main/java/gg/modl/minecraft/core/boot/BackendHost.java)
+resolves that override. Startup calls `/v2/minecraft/startup` with `X-API-Key`;
+normal requests use native `/v1` or `/v3` paths. Startup returns the panel and
+WebSocket URLs derived from this app's `BASE_URL`. The plugin uses those URLs
+and authenticates WebSockets with its API key without a browser Origin header.
+All routes pass through the same HTTPS gateway; no separate public backend or
+WebSocket port is required. The gateway includes the native v2 startup route.
+The plugin's in-console SaaS registration wizard should not be used: register in
+the browser first, then configure the existing instance's key.
+
+This is source inspection and API-level validation, not a live Minecraft-server
+test. Some upstream player-ticket links are still built from IDs; follow the
+[Player ticket links](#player-ticket-links) compatibility note.
 
 ## HTTPS with Caddy
 
@@ -121,8 +166,7 @@ moderation.example.org {
 }
 ```
 
-Caddy handles certificates and WebSocket upgrades. Set both `BASE_URL` and the
-allowed origin to `https://moderation.example.org`, then run:
+Caddy handles certificates and WebSocket upgrades. Set `BASE_URL` to `https://moderation.example.org`, then run:
 
 ```sh
 docker compose up -d
@@ -173,7 +217,7 @@ Their actual names have the Compose project prefix. Ordinary restarts, image
 rebuilds, and `docker compose down` preserve them. `down --volumes` deletes them.
 The existing application stores global records in `modl` and operational records
 in `modl_instance`; replay training also uses `training_data`. Back up the whole MongoDB instance, not just the database name
-at the end of the URI. Include upload sidecar metadata and your `.env` secret.
+at the end of the URI. Include upload sidecar metadata, the hidden `.instance-secret` signing key, and your `.env` configuration.
 
 For a consistent maintenance backup, stop application writes while MongoDB remains
 running. These commands are for a POSIX shell:
@@ -201,8 +245,9 @@ docker compose run --rm --no-deps --user root --entrypoint sh backend -c 'chown 
 docker compose up -d
 ```
 
-Use the original `SESSION_SECRET`; changing it invalidates existing signed file
-and ticket links. This conversion targets a fresh instance. Importing an existing
+Restore the original hidden `.instance-secret` file; replacing it invalidates
+existing signed file and ticket links. For backups taken before automatic key
+generation was added, retain the original `SESSION_SECRET` for the first startup. This conversion targets a fresh instance. Importing an existing
 hosted database or its external files requires a separate data migration.
 
 ## Troubleshooting
@@ -212,14 +257,14 @@ hosted database or its external files requires a separate data migration.
 - **Build cannot download a modl package:** check DNS and connectivity to
   `nexus.modl.gg`. The shared upstream packages are still build dependencies.
 - **Backend unhealthy:** inspect `docker compose logs backend` and MongoDB health.
-  Check that the secret is at least 32 characters and the database address resolves
+  Check uploads-volume permissions and that the database address resolves
   from inside the container.
 - **Registration says it is closed:** the owner record already exists. Log in;
   redeploying containers intentionally does not reset ownership.
 - **Login or uploads fail after enabling HTTPS:** make `BASE_URL` match the actual
   public scheme, host, and port. Recreate the backend after editing `.env`.
-- **Origin rejected:** list the exact browser origin in `CORS_ALLOWED_ORIGINS`, or
-  use the documented reflective settings. Apply changes with `docker compose up -d`.
+- **Origin rejected:** make `BASE_URL` match the browser origin exactly, including
+  scheme and port. Apply changes with `docker compose up -d`.
 - **Realtime disconnects:** preserve proxy upgrade headers and a read timeout
   above the heartbeat interval. The WebSocket address uses the same public domain.
 - **Upload fails:** check disk space, size limits, and volume ownership (UID 1001).
@@ -238,8 +283,8 @@ password. Other staff cannot authorize a reset, even if they can modify settings
 Reset permanently removes all application records from `modl`, `modl_instance`,
 and `training_data`, including accounts, sessions, API keys, settings, moderation
 history, tickets, audit logs, and replays. It also clears the uploads volume,
-including file metadata. Collection indexes, Docker configuration, `.env`, and
-external backups remain. Minecraft plugins must use the new API key after setup.
+including file metadata. The persistent signing key, collection indexes, Docker
+configuration, `.env`, and external backups remain. Minecraft plugins must use the new API key after setup.
 
 The backend writes a durable request into the uploads volume, pauses new requests,
 then exits. Compose's `restart: unless-stopped` restarts it; cleanup runs during
@@ -269,15 +314,15 @@ docker build --target test -t modl-frontend-tests ./frontend
 ```
 
 The backend suite includes password hash storage, owner registration closure,
-login, session invalidation, HTTP origin reflection with credentials, all supported
-origin settings, WebSocket origin validation, persistent uploads, traversal and
+login, session invalidation, BASE_URL-derived HTTP and WebSocket origin checks,
+automatic signing-key persistence, AI usage counters, persistent uploads, traversal and
 symlink rejection, expired/tampered file links, and size/type enforcement. The
 frontend build runs TypeScript and ESLint; its test stage runs the existing tests.
 
 For an acceptance test, use a **disposable** Compose project and database. The test
 creates a known test owner and uploads a text file. Never run it against your real
 instance. Stop your ordinary project first if it already occupies port 8080. Copy
-`.env.example` to `.env`, set a random secret, and leave the local address/origin:
+`.env.example` to `.env` and leave the default local address:
 
 ```sh
 docker compose -p modlcheck up --build -d --wait
@@ -293,11 +338,9 @@ WebSocket exchange and origin rejection, and the upload/confirm/download flow.
 Running it again uses the same disposable owner. Credentials are fixtures in the
 test source, not production defaults.
 
-To exercise the reflective policies against the running gateway, change
-`CORS_ALLOWED_ORIGINS` in `.env` to `*`, recreate the backend with the same Compose
-command, and add `-e E2E_PERMISSIVE_ORIGINS=1` to the test command. Repeat for
-`dynamic`. Restore the explicit local origin afterwards. Unit tests also cover
-comma-separated lists, malformed origins, and default ports.
+Origin unit tests cover default ports, arbitrary public domains, IPv6, and rejection
+of mismatched schemes, hosts, ports and malformed origins. HTTP and WebSocket
+checks use the same BASE_URL-derived policy.
 
 Inspect persistence after recreating the containers. The owner record is in the
 `modl.instance_owner` collection, while settings and staff are in `modl_instance`.
@@ -350,7 +393,7 @@ viewer flow against persistent local storage.
 Validated locally on 26–27 October 2026 using Docker Desktop with Linux containers.
 The retained Java 21 / Spring Boot backend and React frontend passed:
 
-- **958 backend tests**, **12 frontend tests**, TypeScript, ESLint, and production builds.
+- **974 backend tests**, **12 frontend tests**, TypeScript, ESLint, and production builds.
 - Fresh-clone installation: copied the example environment, generated a secret,
   and started exactly MongoDB, backend, and frontend; all services became healthy.
   Both documented Docker test-image builds also passed from a separate clone.
@@ -362,10 +405,15 @@ The retained Java 21 / Spring Boot backend and React frontend passed:
   Owner username changes persist and change the login name. Private staff invitation,
   activation and independent staff permissions passed; owner names cannot be reused.
   Existing account references and passwords are preserved.
-- HTTP and realtime: explicit origins reject untrusted origins. Wildcard and dynamic
-  policies reflect the request origin with credentials. Live binary WebSocket
-  client/server exchanges passed through nginx. Unit tests additionally cover
-  comma-separated lists, malformed origins, and origin normalization.
+- HTTP and realtime: the BASE_URL origin is trusted automatically; other origins
+  are rejected. Live binary WebSocket exchanges pass through nginx. Unit tests
+  cover schemes, hosts, default and custom ports, IPv6 and malformed origins.
+- Automatic signing key: generation, legacy-key import, concurrent initialization,
+  restrictive permissions, corrupt/symlink rejection and restart persistence passed.
+  A no-secret disposable deployment retained signed file and ticket access after
+  backend recreation. Native plugin startup through the v2 gateway returned the
+  expected BASE_URL panel and WebSocket URLs; the plugin-style API-key WebSocket
+  handshake and binary hello succeeded without a browser Origin header.
 - Local uploads: presign, PUT, confirmation and exact download passed. Invalid
   signatures and disallowed types returned errors. Unit tests cover expiry,
   traversal, symlinks, restart persistence, size/type mismatches and overwrite protection.
@@ -376,7 +424,10 @@ The retained Java 21 / Spring Boot backend and React frontend passed:
   passed on a disposable instance. Twelve synthetic files verified browser search,
   category filtering, size sorting and pagination. Retention Save displayed success.
   Deletion feedback checks the returned count, and refreshed lists prune stale selections.
-  The page retains the upstream storage/replay/file controls; the AI usage card is removed.
+  The page retains the upstream storage/replay/file controls. The restored upstream
+  AI usage card shows successful provider requests for the current UTC month and
+  a service breakdown, with no instance quota or cost display. Counts persist in
+  MongoDB and start after this update; they are not historical Gemini billing totals.
 - Replays: a synthetic recording passed upload/confirmation, metadata lookup,
   byte-for-byte download, HTTP ranges, storage listing and retention lookup.
   The browser rendered its block snapshot and played its one-second timeline.

@@ -14,7 +14,7 @@ public final class TicketAccessTokenService {
     private final byte[] secret;
     @Value("${BASE_URL:http://localhost:8080}")
     private String baseUrl;
-    public TicketAccessTokenService(@Value("${SESSION_SECRET}") String secret) {
+    public TicketAccessTokenService(@Value("#{@instanceSecret.value}") String secret) {
         if (secret == null || secret.length() < 32) throw new IllegalArgumentException("SESSION_SECRET must have at least 32 characters");
         this.secret = secret.getBytes(StandardCharsets.UTF_8);
     }

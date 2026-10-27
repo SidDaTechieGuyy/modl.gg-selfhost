@@ -89,6 +89,13 @@ class FactoryResetServiceTest {
         verifyNoInteractions(databases);
     }
 
+    @Test void resetPreservesThePersistentSigningKey() throws Exception {
+        Files.writeString(root.resolve(".instance-secret"), "persistent-key-not-application-data");
+        service.request("owner@example.test", "owner-password", "RESET EVERYTHING");
+        service.completePendingReset();
+        assertEquals("persistent-key-not-application-data", Files.readString(root.resolve(".instance-secret")));
+    }
+
     @Test void refusesDuplicateRequest() {
         service.request("owner@example.test", "owner-password", "RESET EVERYTHING");
         assertThrows(ServiceUnavailableException.class, () -> service.request("owner@example.test", "owner-password", "RESET EVERYTHING"));
