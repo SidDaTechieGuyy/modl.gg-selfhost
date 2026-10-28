@@ -79,10 +79,22 @@ successfully, the old environment value can be removed. An override that differs
 from the persisted key is rejected rather than silently invalidating links.
 
 ```sh
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 docker compose ps
 docker compose logs --tail=100 backend
 ```
+
+The default `docker-compose.yml` pulls production images published by GitHub Actions.
+To build the source locally instead, use the development Compose file:
+
+```sh
+docker compose -f docker-compose-dev.yml -f docker-compose.override.yml up --build -d
+```
+
+`docker-compose-dev.yml` builds the same production containers from source; it does
+not run hot-reload development servers. Both files use the same service and volume
+names, so keep the same project name when switching. Run one variant at a time.
 
 All three services should become healthy. Locally, visit http://localhost:8080.
 For a public instance, configure HTTPS below before creating the owner account.
@@ -156,7 +168,7 @@ retain its resource identity, volume names and environment values. Creating a ne
 application can create new empty volumes instead of using your existing data.
 
 1. Disable Coolify's Git-push automatic deployment; CI should finish publishing first.
-2. Change **Docker Compose Location** to `/docker-compose.images.yml`, then reload
+2. Set **Docker Compose Location** to `/docker-compose.yml`, then reload
    the Compose definition. This file contains exactly the same three services,
    named volumes and network as the source-build file, with images instead of builds.
    Do not include the local `docker-compose.override.yml` in Coolify.
@@ -170,8 +182,8 @@ application can create new empty volumes instead of using your existing data.
 For a plain Docker host, the equivalent command is:
 
 ```sh
-docker compose -f docker-compose.images.yml pull
-docker compose -f docker-compose.images.yml up -d
+docker compose -f docker-compose.yml pull
+docker compose -f docker-compose.yml up -d
 ```
 
 This image Compose file publishes no host ports; it expects a container-based
@@ -443,7 +455,7 @@ instance. Stop your ordinary project first if it already occupies port 8080. Cop
 `.env.example` to `.env` and leave the default local address:
 
 ```sh
-docker compose -p modlcheck up --build -d --wait
+docker compose -p modlcheck -f docker-compose-dev.yml -f docker-compose.override.yml up --build -d --wait
 docker run --rm --network modlcheck_private \
   -e E2E_DISPOSABLE=1 -e E2E_BASE_URL=http://frontend \
   modl-frontend-tests npm run test:e2e
@@ -469,7 +481,7 @@ Use the backup and restore commands in [Persistence and backups](#persistence-an
 When finished, delete **only this disposable project's** data:
 
 ```sh
-docker compose -p modlcheck down --volumes
+docker compose -p modlcheck -f docker-compose-dev.yml -f docker-compose.override.yml down --volumes
 ```
 
 Replay verification can also be run against the disposable project using the

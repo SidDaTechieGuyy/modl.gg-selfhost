@@ -1,4 +1,3 @@
-# Production deployment: images published by GitHub Actions. No local builds.
 services:
   mongodb:
     image: mongo:8.0
@@ -13,7 +12,7 @@ services:
     networks: [private]
 
   backend:
-    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-backend:latest
+    build: ./backend
     restart: unless-stopped
     environment:
       BASE_URL: ${BASE_URL:-http://localhost:8080}
@@ -34,7 +33,7 @@ services:
     networks: [private]
 
   frontend:
-    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-frontend:latest
+    build: ./frontend
     restart: unless-stopped
     expose:
       - "80"
