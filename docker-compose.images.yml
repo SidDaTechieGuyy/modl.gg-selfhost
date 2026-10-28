@@ -1,0 +1,56 @@
+# Production deployment: images published by GitHub Actions. No local builds.
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [private]
+
+  backend:
+    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-backend:${MODL_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/modl}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8080/v1/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 10
+    networks: [private]
+
+  frontend:
+    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-frontend:${MODL_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [private]
+
+volumes:
+  mongodb_data:
+  uploads_data:
+
+networks:
+  private:

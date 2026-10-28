@@ -1,0 +1,98 @@
+name: Test and publish Docker images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: production-images
+  cancel-in-progress: false
+
+jobs:
+  images:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Set registry namespace
+        shell: bash
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Test backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          target: test
+          platforms: linux/amd64
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Test frontend (includes TypeScript, lint and production build)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          target: test
+          platforms: linux/amd64
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+      - name: Publish backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/modl-backend:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+      - name: Publish frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/modl-frontend:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+      - name: Promote completed image pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in backend frontend; do
+            image="ghcr.io/$IMAGE_OWNER/modl-$service"
+            docker buildx imagetools create --tag "$image:latest" "$image:$GITHUB_SHA"
+          done
+          echo "Published both images with version: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Optional Coolify deployment
+        env:
+          WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$WEBHOOK" && -z "$TOKEN" ]]; then
+            echo 'No Coolify secrets configured. Deploy manually after configuring the image Compose file.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ -z "$WEBHOOK" || -z "$TOKEN" ]]; then
+            echo 'Both COOLIFY_DEPLOY_WEBHOOK and COOLIFY_TOKEN are required.' >&2
+            exit 1
+          fi
+          if [[ "$WEBHOOK" != https://* ]]; then
+            echo 'The deployment webhook must use HTTPS.' >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --connect-timeout 15 --max-time 60 \
+            --output /dev/null --header "Authorization: Bearer $TOKEN" "$WEBHOOK"
+          echo 'Coolify accepted the deployment request; check its deployment logs for completion.' >> "$GITHUB_STEP_SUMMARY"

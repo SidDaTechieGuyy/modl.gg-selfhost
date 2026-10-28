@@ -13,6 +13,7 @@ All installation, operation, testing, validation and provenance notes are collec
 - [Prerequisites](#prerequisites)
 - [Install and configure](#install-and-configure)
 - [Deploy with Coolify](#deploy-with-coolify)
+- [GitHub builds and image deployment](#github-builds-and-image-deployment)
 - [First setup and staff](#first-setup-and-staff)
 - [Minecraft plugin connection](#minecraft-plugin-connection)
 - [HTTPS with Caddy](#https-with-caddy) or [nginx](#https-with-nginx)
@@ -114,6 +115,92 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 
 See [Coolify's Compose guide](https://coolify.io/docs/applications/builds/docker-compose)
 for repository-managed configuration and per-service domain routing.
+
+## GitHub builds and image deployment
+
+`.github/workflows/images.yml` runs on pushes to `main` and manual runs from
+GitHub's Actions tab. It uses GitHub-hosted Linux runners; no runner installation
+or build tools are needed on your home server. Both Docker test targets must pass
+before publication. Frontend tests also run the TypeScript check, lint and production
+build. Browser/Compose end-to-end tests are not run by this workflow.
+
+The workflow publishes `linux/amd64` images (suitable for Intel/AMD servers):
+
+- `ghcr.io/siddatechieguyy/modl-backend:latest`
+- `ghcr.io/siddatechieguyy/modl-frontend:latest`
+
+Each image also has a full Git commit SHA tag. Both commit-tagged images are
+published before the workflow updates `latest` and optionally calls Coolify.
+Updating two registry tags is not atomic: if promotion fails, do not deploy
+`latest`; use the matching commit tags or rerun the workflow successfully.
+Docker layer caching reduces repeated builds. Gradle cache mounts may still need
+to download dependencies on fresh runners. Forks publish under their owner's
+lowercase namespace; set `MODL_IMAGE_OWNER` in Compose accordingly.
+
+### First publication
+
+1. Open the GitHub repository's **Actions** tab and enable workflows if prompted.
+2. Open **Test and publish Docker images**, select **Run workflow**, and use `main`.
+   A push to `main` also starts it. Publication uses GitHub's temporary
+   `GITHUB_TOKEN` with package-write permission; no personal token is needed in CI.
+3. Wait for the entire job to succeed. Its summary contains the published commit.
+4. Under your GitHub profile's **Packages**, open each image's package settings.
+   Make both packages public for anonymous server pulls. Newly created packages
+   may be private even when the source repository is public. For private images,
+   configure a GHCR credential with `read:packages` in Coolify's registry settings.
+
+### Switch the existing Coolify application
+
+Back up MongoDB and uploads first. Update the existing application in place;
+retain its resource identity, volume names and environment values. Creating a new
+application can create new empty volumes instead of using your existing data.
+
+1. Disable Coolify's Git-push automatic deployment; CI should finish publishing first.
+2. Change **Docker Compose Location** to `/docker-compose.images.yml`, then reload
+   the Compose definition. This file contains exactly the same three services,
+   named volumes and network as the source-build file, with images instead of builds.
+   Do not include the local `docker-compose.override.yml` in Coolify.
+3. Keep the public HTTPS domain assigned to `frontend`, internal port `80`, and
+   keep `BASE_URL` set to that public address. Preserve any existing `SESSION_SECRET`
+   override and all other configured environment values.
+4. Set `MODL_IMAGE_TAG` to `latest`, or use the full successful commit SHA for an
+   explicitly pinned deployment. Both services use the same value.
+5. Deploy with image pulling enabled. Confirm logs show image pulls rather than
+   Java/Node compilation, and verify login, uploads and the existing data.
+
+For a plain Docker host, the equivalent command is:
+
+```sh
+docker compose -f docker-compose.images.yml pull
+docker compose -f docker-compose.images.yml up -d
+```
+
+This image Compose file publishes no host ports; it expects a container-based
+reverse proxy such as Coolify's. Retain the same Compose project name when
+switching an existing plain Compose installation to preserve its volumes.
+
+### Optional automatic deployment after publication
+
+First complete one manual deployment. Then enable Coolify API access if needed,
+create a deploy-only API token under **Keys & Tokens > API Tokens**, and copy the
+application's **Webhooks > Deploy Webhook (auth required)** URL. In GitHub,
+**Settings > Secrets and variables > Actions**, add repository secrets:
+
+- `COOLIFY_DEPLOY_WEBHOOK`: the copied HTTPS URL.
+- `COOLIFY_TOKEN`: the deploy-only token.
+
+The Coolify API URL must be reachable from GitHub's runners. Leave both secrets
+unset for manual deployment. Do not commit either value. The webhook is called
+only after tests and both image publications/promotions succeed. It queues a
+deployment; a successful webhook response does not prove the app is healthy.
+Check Coolify's deployment logs. For automatic rolling updates use
+`MODL_IMAGE_TAG=latest`; a pinned SHA intentionally stays pinned until you change it.
+
+To roll back, set `MODL_IMAGE_TAG` to a previous successful commit SHA and redeploy.
+Image rollback does not undo database changes; restore backups if required.
+
+References: [GitHub image publication](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images),
+[Coolify deploy webhooks](https://coolify.io/docs/core/automation/deploy-webhooks).
 
 ## First setup and staff
 
