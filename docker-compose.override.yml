@@ -1,6 +1,0 @@
-# Automatically loaded by plain `docker compose up` for local/host-proxy use.
-# Coolify selects docker-compose.yml explicitly and does not need a host port.
-services:
-  frontend:
-    ports:
-      - "127.0.0.1:8080:80"

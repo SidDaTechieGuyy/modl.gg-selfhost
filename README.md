@@ -35,9 +35,8 @@ require internet access to the image, dependency, and upstream modl registries.
 
 For public access, point a domain at your server and install Caddy or nginx on the
 host. Keep ports 80 and 443 available to that proxy. MongoDB and the backend do not
-publish host ports. Plain `docker compose up` automatically loads the local
-`docker-compose.override.yml`, exposing the gateway only on `127.0.0.1:8080`.
-The base `docker-compose.yml` publishes no host ports for container-based proxies.
+publish host ports. Production `docker-compose.yml` exposes the frontend only on
+`127.0.0.1:8181`. The source-build `docker-compose-dev.yml` publishes no host ports.
 
 ## Install and configure
 
@@ -53,7 +52,7 @@ Edit `.env` for your public address. No signing secret needs to be entered:
 
 | Variable | Meaning |
 | --- | --- |
-| `BASE_URL` | Public address including its scheme and optional port, with no path or trailing slash. Use `http://localhost:8080` locally or your `https://…` address publicly. |
+| `BASE_URL` | Public address including its scheme and optional port, with no path or trailing slash. Use `http://localhost:8181` locally or your `https://…` address publicly. |
 | `MONGODB_URI` | Database connection; the supplied Compose address works without modification. |
 | `GEMINI_API_KEY` | Optional. Needed only if you enable the external AI moderation provider. |
 
@@ -89,14 +88,14 @@ The default `docker-compose.yml` pulls production images published by GitHub Act
 To build the source locally instead, use the development Compose file:
 
 ```sh
-docker compose -f docker-compose-dev.yml -f docker-compose.override.yml up --build -d
+docker compose -f docker-compose-dev.yml up --build -d
 ```
 
 `docker-compose-dev.yml` builds the same production containers from source; it does
 not run hot-reload development servers. Both files use the same service and volume
 names, so keep the same project name when switching. Run one variant at a time.
 
-All three services should become healthy. Locally, visit http://localhost:8080.
+All three services should become healthy. Locally, visit http://localhost:8181.
 For a public instance, configure HTTPS below before creating the owner account.
 
 ## Deploy with Coolify
@@ -104,7 +103,6 @@ For a public instance, configure HTTPS below before creating the owner account.
 For a Git-based Coolify application, use `/docker-compose.yml` as Docker Compose
 Location. Load/reload the Compose definition from the repository after pulling
 updates; changes belong in Git rather than the rendered Compose preview.
-Do not include the local `docker-compose.override.yml` in Coolify's file list.
 
 Assign your HTTPS domain to the **frontend** service and set its internal target
 port to **80**. Set `BASE_URL` to that public address, for example
@@ -112,18 +110,11 @@ port to **80**. Set `BASE_URL` to that public address, for example
 MongoDB and backend do not need domains or published ports. The Coolify proxy must
 share a Docker network with frontend; use Coolify-managed routing/network settings.
 
-The base Compose file uses `expose: ["80"]` rather than a host-port mapping, so it
-does not compete for host port 8080 (which may already be in use by Coolify or
-another application). Changing the host mapping to 8181 is unnecessary for proxy
-routing. The public URL still uses standard HTTPS port 443.
-
-For a manually managed host reverse proxy or localhost testing, use plain
-`docker compose up -d` to include the local override. If you specify `-f` yourself,
-include both files when you want the localhost mapping:
-
-```sh
-docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
-```
+Production Compose binds the frontend to `127.0.0.1:8181` for access from the
+Docker host or a host-based reverse proxy. Coolify still routes to container port
+80; do not put 8181 in your public HTTPS `BASE_URL`. Host port 8181 must be free.
+The development Compose file publishes no host ports; access it through a reverse
+proxy on its Docker network, or add your own port mapping when needed.
 
 See [Coolify's Compose guide](https://coolify.io/docs/applications/builds/docker-compose)
 for repository-managed configuration and per-service domain routing.
@@ -171,7 +162,6 @@ application can create new empty volumes instead of using your existing data.
 2. Set **Docker Compose Location** to `/docker-compose.yml`, then reload
    the Compose definition. This file contains exactly the same three services,
    named volumes and network as the source-build file, with images instead of builds.
-   Do not include the local `docker-compose.override.yml` in Coolify.
 3. Keep the public HTTPS domain assigned to `frontend`, internal port `80`, and
    keep `BASE_URL` set to that public address. Preserve any existing `SESSION_SECRET`
    override and all other configured environment values.
@@ -186,8 +176,8 @@ docker compose -f docker-compose.yml pull
 docker compose -f docker-compose.yml up -d
 ```
 
-This image Compose file publishes no host ports; it expects a container-based
-reverse proxy such as Coolify's. Retain the same Compose project name when
+This image Compose file binds the frontend to localhost port 8181. Coolify's
+container-based proxy uses the frontend container's port 80 directly. Retain the same Compose project name when
 switching an existing plain Compose installation to preserve its volumes.
 
 ### Optional automatic deployment after publication
@@ -292,7 +282,7 @@ Run Caddy on the host with this Caddyfile, replacing the example hostname:
 
 ```caddyfile
 moderation.example.org {
-    reverse_proxy 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:8181
 }
 ```
 
@@ -321,7 +311,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/moderation.example.org/privkey.pem;
     client_max_body_size 1024m;
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8181;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -451,11 +441,11 @@ frontend build runs TypeScript and ESLint; its test stage runs the existing test
 
 For an acceptance test, use a **disposable** Compose project and database. The test
 creates a known test owner and uploads a text file. Never run it against your real
-instance. Stop your ordinary project first if it already occupies port 8080. Copy
-`.env.example` to `.env` and leave the default local address:
+instance. Copy `.env.example` to `.env`. The disposable source-build stack has
+no published ports; the test container connects over its Docker network:
 
 ```sh
-docker compose -p modlcheck -f docker-compose-dev.yml -f docker-compose.override.yml up --build -d --wait
+BASE_URL=http://frontend docker compose -p modlcheck -f docker-compose-dev.yml up --build -d --wait
 docker run --rm --network modlcheck_private \
   -e E2E_DISPOSABLE=1 -e E2E_BASE_URL=http://frontend \
   modl-frontend-tests npm run test:e2e
@@ -481,7 +471,7 @@ Use the backup and restore commands in [Persistence and backups](#persistence-an
 When finished, delete **only this disposable project's** data:
 
 ```sh
-docker compose -p modlcheck -f docker-compose-dev.yml -f docker-compose.override.yml down --volumes
+docker compose -p modlcheck -f docker-compose-dev.yml down --volumes
 ```
 
 Replay verification can also be run against the disposable project using the
