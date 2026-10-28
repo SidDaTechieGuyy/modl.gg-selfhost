@@ -13,7 +13,7 @@ services:
     networks: [private]
 
   backend:
-    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-backend:${MODL_IMAGE_TAG:-latest}
+    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-backend:latest
     restart: unless-stopped
     environment:
       BASE_URL: ${BASE_URL:-http://localhost:8080}
@@ -34,7 +34,7 @@ services:
     networks: [private]
 
   frontend:
-    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-frontend:${MODL_IMAGE_TAG:-latest}
+    image: ghcr.io/${MODL_IMAGE_OWNER:-siddatechieguyy}/modl-frontend:latest
     restart: unless-stopped
     expose:
       - "80"

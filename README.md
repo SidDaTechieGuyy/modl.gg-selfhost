@@ -163,8 +163,7 @@ application can create new empty volumes instead of using your existing data.
 3. Keep the public HTTPS domain assigned to `frontend`, internal port `80`, and
    keep `BASE_URL` set to that public address. Preserve any existing `SESSION_SECRET`
    override and all other configured environment values.
-4. Set `MODL_IMAGE_TAG` to `latest`, or use the full successful commit SHA for an
-   explicitly pinned deployment. Both services use the same value.
+4. Both service images use `latest` directly; no image-tag environment variable is needed.
 5. Deploy with image pulling enabled. Confirm logs show image pulls rather than
    Java/Node compilation, and verify login, uploads and the existing data.
 
@@ -193,10 +192,10 @@ The Coolify API URL must be reachable from GitHub's runners. Leave both secrets
 unset for manual deployment. Do not commit either value. The webhook is called
 only after tests and both image publications/promotions succeed. It queues a
 deployment; a successful webhook response does not prove the app is healthy.
-Check Coolify's deployment logs. For automatic rolling updates use
-`MODL_IMAGE_TAG=latest`; a pinned SHA intentionally stays pinned until you change it.
+Check Coolify's deployment logs. Both services use `latest` for automatic updates.
 
-To roll back, set `MODL_IMAGE_TAG` to a previous successful commit SHA and redeploy.
+To roll back, manually replace `:latest` in both image references with the same
+previous successful full commit SHA, reload the Compose definition, and redeploy.
 Image rollback does not undo database changes; restore backups if required.
 
 References: [GitHub image publication](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images),
