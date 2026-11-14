@@ -110,7 +110,10 @@ or a JVM option before `-jar`:
 java -Dmodl.api.url=https://modl.example.com -jar paper.jar nogui
 ```
 
-On DiscoPanel, append the `-Dmodl.api.url=...` option under **Properties → JVM Options**.
+If you use a Minecraft server panel, add `-Dmodl.api.url=https://modl.example.com`
+to its JVM options before `-jar`, or set `MODL_API_URL` in the Minecraft server's
+environment variables. The setting names vary by panel; it must apply to the
+Minecraft process, not just the panel itself.
 Restart Minecraft afterward. Use the domain only, without `/api` or version suffixes.
 The plugin must be able to reach it and trust its HTTPS certificate. Do not use the
 plugin's hosted registration wizard for this self-hosted instance.
