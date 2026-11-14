@@ -24,8 +24,7 @@ on your own domain, with your own database and files.
   the reset phrase and their password.
 
 This is an adaptation of the existing app, not an official modl.gg release.
-Use the `main` branch for the general version. `the-elite-smp` is a separate,
-server-specific homepage customisation.
+Use the `main` branch for the general self-hosted version.
 
 ## Quick start
 
