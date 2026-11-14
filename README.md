@@ -85,17 +85,6 @@ set upload-size limits appropriate for your evidence files.
 
 After changing `.env`, run `docker compose up -d` to apply it.
 
-### Coolify
-
-1. Add this Git repository using the **Docker Compose** build strategy and `main` branch.
-2. Set **Docker Compose Location** to `/docker-compose.yml` and load the definition.
-3. Assign your HTTPS domain to **frontend**, internal port **80**.
-4. Set `BASE_URL` to that public address and deploy.
-
-The Compose file pulls prebuilt images; your server does not compile the app.
-Port 8181 must be free on the host. Coolify's proxy routes to container port 80.
-When updating an existing installation, keep the same Coolify resource and volumes.
-
 ## Connect your Minecraft server
 
 Install the upstream [modl Minecraft plugin](https://github.com/modl-gg/minecraft/releases)
@@ -151,11 +140,6 @@ and through **Actions → Test and publish Docker images → Run workflow**. It 
 Git commit tags. Wait for the complete workflow to succeed before deploying.
 For rollback, replace `:latest` in both image references with the same previous
 successful full commit SHA. Image rollback does not reverse database changes.
-
-For optional automatic Coolify deployment, disable its Git-push auto-deploy and add
-GitHub repository Actions secrets `COOLIFY_DEPLOY_WEBHOOK` and `COOLIFY_TOKEN`.
-Use the application's authenticated HTTPS deployment webhook and a deploy-only API
-token. The API must be reachable from GitHub. Without these secrets, deploy manually.
 
 For forks, publish your own images and set `MODL_IMAGE_OWNER` to your lowercase
 GitHub owner name. Make the packages public or configure GHCR pull credentials.
